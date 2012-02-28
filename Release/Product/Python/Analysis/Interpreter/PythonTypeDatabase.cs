@@ -37,7 +37,7 @@ namespace Microsoft.PythonTools.Interpreter {
         /// <summary>
         /// Gets the version of the analysis format that this class reads.
         /// </summary>
-        public static readonly int CurrentVersion = 13;
+        public static readonly int CurrentVersion = 14;
 
         public PythonTypeDatabase(string databaseDirectory, bool is3x = false, IBuiltinPythonModule builtinsModule = null) {
             _sharedState = new SharedDatabaseState(databaseDirectory, is3x, builtinsModule);
@@ -194,6 +194,7 @@ namespace Microsoft.PythonTools.Interpreter {
                 var proc = Process.Start(psi);
                 OutputDataReceiver receiver = new OutputDataReceiver();
                 proc.OutputDataReceived += receiver.OutputDataReceived;
+                proc.ErrorDataReceived += receiver.OutputDataReceived;
 
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
