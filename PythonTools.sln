@@ -2,8 +2,9 @@ Microsoft Visual Studio Solution File, Format Version 11.00
 # Visual Studio 2010
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{DE1001DA-7415-45A5-9A42-E2E64535B682}"
 	ProjectSection(SolutionItems) = preProject
-		codecoverage.testsettings = codecoverage.testsettings
-		default.testsettings = default.testsettings
+		Build\CodeCoverage\codecoverage.testsettings = Build\CodeCoverage\codecoverage.testsettings
+		Build\CodeCoverage\default.testsettings = Build\CodeCoverage\default.testsettings
+		PythonTools.vsmdi = PythonTools.vsmdi
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestSccPackage", "Release\Tests\TestSccPackage\TestSccPackage.csproj", "{E75E5DB1-0EA0-4247-A830-FE467C016816}"
@@ -113,6 +114,9 @@ Global
 		SccAuxPath13 = http://tcvstf:8080/tfs/tc
 		SccLocalPath13 = Release\\Product\\Python\\MpiShim
 		SccProvider13 = {4CA58AB2-18FA-4F8D-95D4-32DDF27D184C}
+	EndGlobalSection
+	GlobalSection(TestCaseManagementSettings) = postSolution
+		CategoryFile = PythonTools.vsmdi
 	EndGlobalSection
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
