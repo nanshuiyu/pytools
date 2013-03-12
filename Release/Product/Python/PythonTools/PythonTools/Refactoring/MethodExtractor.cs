@@ -52,7 +52,8 @@ namespace Microsoft.PythonTools.Refactoring {
 
             Debug.Assert(walker.Target != null);
             // expand the selection if we aren't currently covering a full expression/statement
-            if (WasSelectionExpanded(walker.Target, selectionStart, selectionEnd) && !input.ShouldExpandSelection()) {
+            if (!walker.Target.IsValidSelection ||
+                (WasSelectionExpanded(walker.Target, selectionStart, selectionEnd) && !input.ShouldExpandSelection())) {
                 return false;
             }
 
@@ -161,7 +162,7 @@ namespace Microsoft.PythonTools.Refactoring {
 
         private static bool WasSelectionExpanded(SelectionTarget target, SnapshotPoint selectionStart, SnapshotPoint selectionEnd) {
             if (target.Start != selectionStart.Position) {
-                for (var curChar = selectionStart; curChar.Position >= target.Start; curChar -= 1) {
+                for (var curChar = selectionStart - 1; curChar.Position >= target.Start; curChar -= 1) {
                     if (!Char.IsWhiteSpace(curChar.GetChar())) {
                         return true;
                     }

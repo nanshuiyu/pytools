@@ -39,17 +39,38 @@ namespace Microsoft.PythonTools.Parsing.Ast {
             walker.PostWalk(this);
         }
 
-        internal override void AppendCodeString(StringBuilder res, PythonAst ast) {
-            AppendItems(res, ast, "[", this.IsMissingCloseGrouping(ast) ? "" : "]", this, Items);
+        internal override void AppendCodeString(StringBuilder res, PythonAst ast, CodeFormattingOptions format) {
+            if (Items.Count == 0 && format.SpacesWithinEmptyListExpression != null) {
+                res.Append(this.GetProceedingWhiteSpace(ast));
+                res.Append('[');
+                if (String.IsNullOrWhiteSpace(this.GetSecondWhiteSpace(ast))) {
+                    res.Append(format.SpacesWithinEmptyListExpression.Value ? " " : "");
+                } else {
+                    format.ReflowComment(res, this.GetSecondWhiteSpace(ast));
+                }
+                res.Append(']');
+            } else {
+                string delimWs =
+                 format.SpacesWithinListExpression != null ?
+                 format.SpacesWithinListExpression.Value ? " " : "" : null;
+
+                AppendItems(res, ast, format, "[", this.IsMissingCloseGrouping(ast) ? "" : "]", this, Items, delimWs);
+            }
         }
 
-        internal static void AppendItems<T>(StringBuilder res, PythonAst ast, string start, string end, Node node, IList<T> items) where T : Expression {
-            AppendItems(res, ast, start, end, node, items.Count, (i, sb) => items[i].AppendCodeString(sb, ast));
+        internal static void AppendItems<T>(StringBuilder res, PythonAst ast, CodeFormattingOptions format, string start, string end, Node node, IList<T> items, string delimiterWhiteSpace = null) where T : Expression {
+            AppendItems(res, ast, format, start, end, node, items.Count, (i, sb) => {
+                if (i == 0) {
+                    items[i].AppendCodeString(sb, ast, format, delimiterWhiteSpace);
+                } else {
+                    items[i].AppendCodeString(sb, ast, format);
+                }
+            }, delimiterWhiteSpace);
         }
 
-        internal static void AppendItems(StringBuilder res, PythonAst ast, string start, string end, Node node, int itemCount, Action<int, StringBuilder> appendItem) {
+        internal static void AppendItems(StringBuilder res, PythonAst ast, CodeFormattingOptions format, string start, string end, Node node, int itemCount, Action<int, StringBuilder> appendItem, string trailingWhiteSpace = null) {
             if (!String.IsNullOrEmpty(start)) {
-                res.Append(node.GetProceedingWhiteSpace(ast));
+                format.ReflowComment(res, node.GetProceedingWhiteSpace(ast));
                 res.Append(start);
             }
             var listWhiteSpace = node.GetListWhiteSpace(ast);
@@ -60,7 +81,7 @@ namespace Microsoft.PythonTools.Parsing.Ast {
                     }
                     res.Append(",");
                 }
-
+                
                 appendItem(i, res);
             }
 
@@ -71,7 +92,11 @@ namespace Microsoft.PythonTools.Parsing.Ast {
             }
 
             if (!String.IsNullOrEmpty(end)) {
-                res.Append(node.GetSecondWhiteSpace(ast));
+                res.Append(
+                    String.IsNullOrWhiteSpace(node.GetSecondWhiteSpace(ast)) ?
+                        trailingWhiteSpace ?? node.GetSecondWhiteSpace(ast) :
+                        node.GetSecondWhiteSpace(ast)
+                );
                 res.Append(end);
             }
         }

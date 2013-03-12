@@ -39,7 +39,10 @@ namespace Microsoft.PythonTools.Project {
         SearchPathContainer,
         SearchPath,
         MissingSearchPath,
-        StartupFile
+        StartupFile,
+        VirtualEnvContainer = SearchPathContainer,
+        VirtualEnv = SearchPath,
+        VirtualEnvPackage = SearchPath
     }
 
     public abstract class CommonProjectNode : ProjectNode, IVsProjectSpecificEditorMap2, IVsDeferredSaveProject {
@@ -447,20 +450,17 @@ namespace Microsoft.PythonTools.Project {
         }
 
         internal void BoldStartupItem(HierarchyNode startupItem) {
-            if (!_boldedStartupItem) {
-                IVsUIHierarchyWindow2 windows = VsShellUtilities.GetUIHierarchyWindow(
-                    ProjectMgr.Site as IServiceProvider,
-                    new Guid(ToolWindowGuids80.SolutionExplorer)) as IVsUIHierarchyWindow2;
-
-                if (ErrorHandler.Succeeded(windows.SetItemAttribute(
-                    this,
-                    startupItem.ID,
-                    (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold,
-                    true
-                ))) {
-                    _boldedStartupItem = true;
-                }
+            if (!_boldedStartupItem && BoldItem(startupItem, true)) {
+                _boldedStartupItem = true;
             }
+        }
+
+        internal bool BoldItem(HierarchyNode item, bool bolded) {
+            IVsUIHierarchyWindow2 windows = GetUIHierarchyWindow(
+                ProjectMgr.Site as IServiceProvider,
+                new Guid(ToolWindowGuids80.SolutionExplorer)) as IVsUIHierarchyWindow2;
+
+            return ErrorHandler.Succeeded(windows.SetItemAttribute(this, item.ID, (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold, bolded));
         }
 
         /// <summary>
@@ -635,32 +635,62 @@ namespace Microsoft.PythonTools.Project {
         }
 
         /// <summary>
+        /// Same as VsShellUtilities.GetUIHierarchyWindow, but it doesn't contain a useless cast to IVsWindowPane
+        /// which fails on Dev10 with the solution explorer window.
+        /// </summary>
+        private static IVsUIHierarchyWindow GetUIHierarchyWindow(IServiceProvider serviceProvider, Guid guidPersistenceSlot) {
+            if (serviceProvider == null) {
+                throw new ArgumentException("serviceProvider");
+            }
+            IVsUIShell service = serviceProvider.GetService(typeof(SVsUIShell)) as IVsUIShell;
+            if (service == null) {
+                throw new InvalidOperationException();
+            }
+            object pvar = null;
+            IVsWindowFrame ppWindowFrame = null;
+            IVsUIHierarchyWindow window = null;
+            try {
+                ErrorHandler.ThrowOnFailure(service.FindToolWindow(0, ref guidPersistenceSlot, out ppWindowFrame));
+                ErrorHandler.ThrowOnFailure(ppWindowFrame.GetProperty(-3001, out pvar));
+            } catch (COMException exception) {
+                Trace.WriteLine("Exception :" + exception.Message);
+            } finally {
+                if (pvar != null) {
+                    window = (IVsUIHierarchyWindow)pvar;
+                }
+            }
+            return window;
+        }
+
+        /// <summary>
         /// Returns first immediate child node (non-recursive) of a given type.
         /// </summary>
         private void RefreshStartupFile(HierarchyNode parent, string oldFile, string newFile) {
-            IVsUIHierarchyWindow2 windows = VsShellUtilities.GetUIHierarchyWindow(
+            IVsUIHierarchyWindow2 windows = GetUIHierarchyWindow(
                 Site,
                 new Guid(ToolWindowGuids80.SolutionExplorer)) as IVsUIHierarchyWindow2;
 
             for (HierarchyNode n = parent.FirstChild; n != null; n = n.NextSibling) {
                 // TODO: Distinguish between real Urls and fake ones (eg. "References")
-                var absUrl = CommonUtils.GetAbsoluteFilePath(parent.ProjectMgr.ProjectHome, n.Url);
-                if (CommonUtils.IsSamePath(oldFile, absUrl)) {
-                    windows.SetItemAttribute(
-                        this,
-                        n.ID,
-                        (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold,
-                        false
-                    );
-                    n.ReDraw(UIHierarchyElement.Icon);
-                } else if (CommonUtils.IsSamePath(newFile, absUrl)) {
-                    windows.SetItemAttribute(
-                        this,
-                        n.ID,
-                        (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold,
-                        true
-                    );
-                    n.ReDraw(UIHierarchyElement.Icon);
+                if (windows != null) {
+                    var absUrl = CommonUtils.GetAbsoluteFilePath(parent.ProjectMgr.ProjectHome, n.Url);
+                    if (CommonUtils.IsSamePath(oldFile, absUrl)) {
+                        windows.SetItemAttribute(
+                            this,
+                            n.ID,
+                            (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold,
+                            false
+                        );
+                        n.ReDraw(UIHierarchyElement.Icon);
+                    } else if (CommonUtils.IsSamePath(newFile, absUrl)) {
+                        windows.SetItemAttribute(
+                            this,
+                            n.ID,
+                            (uint)__VSHIERITEMATTRIBUTE.VSHIERITEMATTRIBUTE_Bold,
+                            true
+                        );
+                        n.ReDraw(UIHierarchyElement.Icon);
+                    }
                 }
 
                 RefreshStartupFile(n, oldFile, newFile);
@@ -700,7 +730,7 @@ namespace Microsoft.PythonTools.Project {
             List<string> parsedPaths = new List<string>();
             if (!string.IsNullOrEmpty(searchPath)) {
                 foreach (string path in searchPath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries)) {
-                    string resolvedPath = CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, path);
+                    string resolvedPath = CommonUtils.GetAbsoluteFilePath(ProjectHome, path);
                     if (!parsedPaths.Contains(resolvedPath)) {
                         parsedPaths.Add(resolvedPath);
                     }
@@ -727,7 +757,7 @@ namespace Microsoft.PythonTools.Project {
             Utilities.ArgumentNotNull("newpath", newpath);
 
             IList<string> searchPath = ParseSearchPath();
-            var relativePath = CommonUtils.GetRelativeDirectoryPath(ProjectHome, CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, newpath));
+            var relativePath = CommonUtils.GetRelativeFilePath(ProjectHome, CommonUtils.GetAbsoluteFilePath(ProjectHome, newpath));
             if (searchPath.Contains(newpath, StringComparer.OrdinalIgnoreCase) ||
                 searchPath.Contains(relativePath, StringComparer.OrdinalIgnoreCase)) {
                 return;
@@ -813,6 +843,37 @@ namespace Microsoft.PythonTools.Project {
             }
             return VSConstants.S_OK;
         }
+
+        internal unsafe int AddSearchPathZip() {
+            var uiShell = GetService(typeof(SVsUIShell)) as IVsUIShell;
+            if (uiShell == null) {
+                return VSConstants.S_FALSE;
+            }
+
+            var fileNameBuf = stackalloc char[NativeMethods.MAX_PATH];
+            var ofn = new[] {
+                new VSOPENFILENAMEW {
+                    lStructSize = (uint)Marshal.SizeOf(typeof(VSOPENFILENAMEW)),
+                    pwzDlgTitle = DynamicProjectSR.GetString(DynamicProjectSR.SelectZipFileForSearchPath),
+                    nMaxFileName = NativeMethods.MAX_PATH,
+                    pwzFileName = (IntPtr)fileNameBuf,
+                    pwzInitialDir = ProjectHome,
+                    pwzFilter = "Zip Archives\0*.zip\0All Files\0*.*\0"
+                }
+            };
+            uiShell.GetDialogOwnerHwnd(out ofn[0].hwndOwner);
+
+            var hr = uiShell.GetOpenFileNameViaDlg(ofn);
+            if (hr == VSConstants.OLE_E_PROMPTSAVECANCELLED) {
+                return VSConstants.S_OK;
+            }
+            ErrorHandler.ThrowOnFailure(hr);
+
+            string fileName = new string(fileNameBuf);
+            AddSearchPathEntry(fileName);
+            return VSConstants.S_OK;
+        }
+
         #endregion
 
         #region IVsProjectSpecificEditorMap2 Members

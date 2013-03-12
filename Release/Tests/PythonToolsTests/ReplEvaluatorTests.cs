@@ -16,14 +16,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.PythonTools.Interpreter;
 using Microsoft.PythonTools.Interpreter.Default;
 using Microsoft.PythonTools.Repl;
-using Microsoft.VisualStudio.Repl;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using TestUtilities;
 using TestUtilities.Mocks;
 
 namespace PythonToolsTests {
@@ -35,6 +33,10 @@ namespace PythonToolsTests {
 
     [TestClass]
     public class ReplEvaluatorTests {
+        [ClassInitialize]
+        public static void DoDeployment(TestContext context) {
+            TestData.Deploy();
+        }
 
         [TestMethod, Priority(0)]
         public void ExecuteTest() {
@@ -46,10 +48,10 @@ namespace PythonToolsTests {
                 TestOutput(window, evaluator, "42", true, "42");
                 TestOutput(window, evaluator, "for i in xrange(2):  print i\n", true, "0", "1");
                 TestOutput(window, evaluator, "raise Exception()\n", false, "Traceback (most recent call last):", "  File \"<stdin>\", line 1, in <module>", "Exception");
-                           
+
                 TestOutput(window, evaluator, "try:\r\n    print 'hello'\r\nexcept:\r\n    print 'goodbye'\r\n    \r\n    ", true, "hello");
                 TestOutput(window, evaluator, "try:\r\n    print 'hello'\r\nfinally:\r\n    print 'goodbye'\r\n    \r\n    ", true, "hello", "goodbye");
-                           
+
                 TestOutput(window, evaluator, "import sys", true);
                 TestOutput(window, evaluator, "sys.exit(0)", false);
             }
@@ -94,8 +96,12 @@ namespace PythonToolsTests {
             string pythonDir = FindPythonInterpreterDir("26");
             string pythonExe = Path.Combine(pythonDir, "python.exe");
             string pythonWinExe = Path.Combine(pythonDir, "pythonw.exe");
-            
-            return new PythonReplEvaluator(new SimpleFactoryProvider(pythonExe, pythonWinExe), Guid.Empty, new Version(2,6), null);
+
+            if (!File.Exists(pythonExe) || !File.Exists(pythonWinExe)) {
+                Assert.Inconclusive("Test requires Python 2.6 to be installed and in PATH or C:\\Python26\\");
+            }
+
+            return new PythonReplEvaluator(new SimpleFactoryProvider(pythonExe, pythonWinExe), Guid.Empty, new Version(2, 6), null);
         }
 
         class SimpleFactoryProvider : IPythonInterpreterFactoryProvider {
@@ -106,7 +112,7 @@ namespace PythonToolsTests {
                 _pythonExe = pythonExe;
                 _pythonWinExe = pythonWinExe;
             }
-            
+
             public IEnumerable<IPythonInterpreterFactory> GetInterpreterFactories() {
                 yield return new CPythonInterpreterFactory(new Version(2, 6), Guid.Empty, "Python", _pythonExe, _pythonWinExe, "PYTHONPATH", System.Reflection.ProcessorArchitecture.X86);
             }
@@ -127,7 +133,7 @@ namespace PythonToolsTests {
                 if (output.Length == 0) {
                     Assert.IsTrue(expectedOutput.Length == 0);
                 } else {
-                    // don't count ending \n as new empty line                    
+                    // don't count ending \n as new empty line
                     output = output.Replace("\r\n", "\n");
                     if (output[output.Length - 1] == '\n') {
                         output.Remove(output.Length - 1, 1);

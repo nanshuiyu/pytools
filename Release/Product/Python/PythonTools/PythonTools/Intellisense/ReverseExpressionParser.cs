@@ -34,7 +34,7 @@ namespace Microsoft.PythonTools.Intellisense {
             "=" ,  "+=" ,  "-=" ,  "/=" ,  "%=" ,  "^=" ,  "*=" ,  "//=" ,  "&=" ,  "|=" ,  ">>=" ,  "<<=" ,  "**="
         };
         private static readonly string[] _stmtKeywords = new[] {
-            "assert", "print" , "break" ,  "del" ,  "except" ,  "finally" ,  "for" ,  "global" ,  
+            "assert", "print" , "break" ,  "del" ,  "except" ,  "finally" ,  "global" ,  
             "nonlocal" ,  "pass" ,  "raise" ,  "return" ,  "try" ,  "while" ,  "with" ,  "class" ,  
             "def"
         };
@@ -437,6 +437,29 @@ namespace Microsoft.PythonTools.Intellisense {
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         {
             return ReverseClassificationSpanEnumerator(_classifier, _span.GetSpan(_snapshot).End);
+        }
+
+        internal bool IsInGrouping() {
+            // We assume that groupings are correctly matched and keep a simple
+            // nesting count.
+            int nesting = 0;
+            foreach (var token in this) {
+                if (token == null) {
+                    continue;
+                }
+
+                if (token.IsCloseGrouping()) {
+                    nesting++;
+                } else if (token.IsOpenGrouping()) {
+                    if (nesting-- == 0) {
+                        return true;
+                    }
+                } else if (token.ClassificationType.IsOfType(PredefinedClassificationTypeNames.Keyword) &&
+                    IsStmtKeyword(token.Span.GetText())) {
+                    return false;
+                }
+            }
+            return false;
         }
     }
 }

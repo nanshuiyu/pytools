@@ -1415,6 +1415,9 @@ namespace Microsoft.PythonTools.Project
                     case (uint)VSConstants.VsUIHierarchyWindowCmdIds.UIHWCMDID_EnterKey:
                         this.DoDefaultAction();
                         return VSConstants.S_OK;
+                    case (uint)VSConstants.VsUIHierarchyWindowCmdIds.UIHWCMDID_CancelLabelEdit:
+                        this.OnCancelLabelEdit();
+                        return VSConstants.S_OK;
                 }
                 return (int)OleConstants.OLECMDERR_E_NOTSUPPORTED;
             }
@@ -2046,6 +2049,14 @@ namespace Microsoft.PythonTools.Project
         }
 
         /// <summary>
+        /// Invoked when the node receives UIHWCMDID_CancelLabelEdit hierarchy window command, which occurs
+        /// when user cancels the label editing operation.
+        /// </summary>
+        protected virtual void OnCancelLabelEdit()
+        {
+        }
+
+        /// <summary>
         /// The method that does the cleanup.
         /// </summary>
         /// <param name="disposing">Is the Dispose called by some internal member, or it is called by from GC.</param>
@@ -2304,14 +2315,14 @@ namespace Microsoft.PythonTools.Project
         {
             Utilities.ArgumentNotNull("node", node);
 
-            HierarchyNode foo;
-            foo = this.projectMgr == null ? this : this.projectMgr;
-            if (foo == this.projectMgr && (this.projectMgr.EventTriggeringFlag & ProjectNode.EventTriggering.DoNotTriggerHierarchyEvents) != 0)
+            HierarchyNode targetNode;
+            targetNode = this.projectMgr == null ? this : this.projectMgr;
+            if (targetNode == this.projectMgr && (this.projectMgr.EventTriggeringFlag & ProjectNode.EventTriggering.DoNotTriggerHierarchyEvents) != 0)
             {
                 return;
             }
 
-            foreach (IVsHierarchyEvents sink in foo.hierarchyEventSinks)
+            foreach (IVsHierarchyEvents sink in targetNode.hierarchyEventSinks)
             {
                 int result = sink.OnPropertyChanged(node.hierarchyId, propid, flags);
 
@@ -2372,6 +2383,11 @@ namespace Microsoft.PythonTools.Project
                 if ((element & UIHierarchyElement.SccState) != 0)
                 {
                     result = sink.OnPropertyChanged(this.ID, (int)__VSHPROPID.VSHPROPID_StateIconIndex, 0);
+                    Debug.Assert(ErrorHandler.Succeeded(result), "Redraw failed for node " + this.GetMkDocument());
+                }
+                
+                if ((element & UIHierarchyElement.OverlayIcon) != 0) {
+                    result = sink.OnPropertyChanged(this.ID, (int)__VSHPROPID.VSHPROPID_OverlayIconIndex, 0);
                     Debug.Assert(ErrorHandler.Succeeded(result), "Redraw failed for node " + this.GetMkDocument());
                 }
             }
@@ -2989,7 +3005,7 @@ namespace Microsoft.PythonTools.Project
             return FindChild(name, true);
         }
 
-        internal HierarchyNode FindChild(string name, bool recurse)
+        internal virtual HierarchyNode FindChild(string name, bool recurse)
         {
             if (String.IsNullOrEmpty(name))
             {

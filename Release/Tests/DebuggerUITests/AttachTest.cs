@@ -15,23 +15,15 @@
 using System;
 using System.Linq;
 using System.Reflection;
-using System.Threading;
-using System.Windows.Input;
 using EnvDTE;
 using EnvDTE80;
 using EnvDTE90;
 using Microsoft.PythonTools;
-using Microsoft.PythonTools.Interpreter;
+using Microsoft.PythonTools.Debugger.DebugEngine;
 using Microsoft.TC.TestHostAdapters;
-using Microsoft.TestSccPackage;
 using Microsoft.VisualStudio.ComponentModelHost;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using TestUtilities;
-using TestUtilities.UI;
-using Keyboard = TestUtilities.UI.Keyboard;
-using Mouse = TestUtilities.UI.Mouse;
 using Path = System.IO.Path;
 using SD = System.Diagnostics;
 
@@ -99,11 +91,11 @@ namespace DebuggerUITests {
             string startFile = "Simple.py";
 
             Debugger2 dbg2 = (Debugger2)VsIdeTestHostContext.Dte.Debugger;
-            
+
             SD.Process processToAttach = OpenSolutionAndLaunchFile(debugSolution, startFile, "", "");
 
             try {
-                AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgRunMode);
+                AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgRunMode);
             } finally {
                 dbg2.DetachAll();
                 DebugProject.WaitForMode(dbgDebugMode.dbgDesignMode);
@@ -128,7 +120,7 @@ namespace DebuggerUITests {
             VsIdeTestHostContext.Dte.Debugger.Breakpoints.Add(File: startFile, Line: breakLine);
 
             try {
-                AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgBreakMode);
+                AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgBreakMode);
             } finally {
                 dbg2.DetachAll();
                 DebugProject.WaitForMode(dbgDebugMode.dbgDesignMode);
@@ -145,13 +137,13 @@ namespace DebuggerUITests {
             string debugSolution = TestData.GetPath(@"TestData\DebugAttach\DebugAttach.sln");
             string startFile = "Simple.py";
             int breakLine = 22;
-            
+
             Debugger2 dbg2 = (Debugger2)VsIdeTestHostContext.Dte.Debugger;
 
             SD.Process processToAttach = OpenSolutionAndLaunchFile(debugSolution, startFile, "", "");
 
             try {
-                AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgRunMode);
+                AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgRunMode);
                 dbg2.Breakpoints.Add(File: startFile, Line: breakLine);
                 DebugProject.WaitForMode(dbgDebugMode.dbgBreakMode);
 
@@ -173,7 +165,7 @@ namespace DebuggerUITests {
             SD.Process processToAttach = OpenSolutionAndLaunchFile(debugSolution, startFile, "", "");
 
             try {
-                Process2 proc = AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgRunMode);
+                Process2 proc = AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgRunMode);
                 dbg2.Break(WaitForBreakMode: false);
                 DebugProject.WaitForMode(dbgDebugMode.dbgBreakMode);
 
@@ -207,7 +199,7 @@ namespace DebuggerUITests {
             SD.Process processToAttach = OpenSolutionAndLaunchFile(debugSolution, startFile, "", "");
 
             try {
-                Process2 proc = AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgRunMode);
+                Process2 proc = AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgRunMode);
                 dbg2.Breakpoints.Add(File: startFile, Line: breakLine);
                 DebugProject.WaitForMode(dbgDebugMode.dbgBreakMode);
                 dbg2.BreakpointLastHit.Delete();
@@ -242,8 +234,8 @@ namespace DebuggerUITests {
             System.Threading.Thread.Sleep(2000);
 
             try {
-                Process2 proc = AttachAndWaitForMode(processToAttach, "Python Debugging", dbgDebugMode.dbgRunMode);
-                
+                Process2 proc = AttachAndWaitForMode(processToAttach, AD7Engine.DebugEngineName, dbgDebugMode.dbgRunMode);
+
             } finally {
                 if (!processToAttach.HasExited) processToAttach.Kill();
             }
@@ -299,18 +291,34 @@ namespace DebuggerUITests {
 
             string projectInterpreter = GetProjectInterpreterOrDefault(project);
 
-            SD.Process p = SD.Process.Start(projectInterpreter, cmdlineArgs);
+            var psi = new SD.ProcessStartInfo(projectInterpreter, cmdlineArgs);
+            psi.RedirectStandardError = true;
+            psi.RedirectStandardOutput = true;
+            psi.UseShellExecute = false;
+            var p = SD.Process.Start(psi);
+            p.EnableRaisingEvents = true;
+            string output = "";
+            p.OutputDataReceived += (sender, args) => {
+                output += args.Data;
+            };
+            p.ErrorDataReceived += (sender, args) => {
+                output += args.Data;
+            };
+            p.BeginErrorReadLine();
+            p.BeginOutputReadLine();
+            p.Exited += (sender, args) => {
+                SD.Debug.WriteLine("Process Id ({0}) exited with ExitCode: {1}", p.Id, p.ExitCode);
+                SD.Debug.WriteLine(String.Format("Output: {0}", output));
+            };
 
-            Assert.IsNotNull(p, "Failure to start process {0} {1} {2} {3}", projectInterpreter, interpreterArgs, fullFilename, programArgs);
+            Assert.IsNotNull(p, "Failure to start process, {0} {1} ", projectInterpreter, cmdlineArgs);
             return p;
         }
 
         public static string GetProjectInterpreterOrDefault(EnvDTE.Project project) {
             var interpreterId = (string)project.Properties.Item("InterpreterId").Value;
             var interpreterVersion = (string)project.Properties.Item("InterpreterVersion").Value;
-            var args = (string)project.Properties.Item("CommandLineArguments").Value;
             var interpreterPath = (string)project.Properties.Item("InterpreterPath").Value;
-            var searchPath = (string)project.Properties.Item("SearchPath").Value;
             string interpreter;
             Guid intGuid;
             Version intVersion;
@@ -319,19 +327,26 @@ namespace DebuggerUITests {
 
             // use the project's custom interpreter path if defined
             if (!String.IsNullOrWhiteSpace(interpreterPath)) {
-                return Path.GetFullPath(interpreterPath);
+                interpreter = Path.GetFullPath(interpreterPath);
+                SD.Debug.WriteLine("Using project specified interpreter path: {0}", interpreter, null);
+                return interpreter;
             }
             // use the project's interpreter if we can find it
             if (Guid.TryParse(interpreterId, out intGuid) &&
                 Version.TryParse(interpreterVersion, out intVersion) &&
                 TryGetInterpreter(intVersion, intGuid, out interpreter, out searchPathEnvVarName, out arch)) {
-                return Path.GetFullPath(interpreter);
+                interpreter = Path.GetFullPath(interpreter);
+                SD.Debug.WriteLine("Using project specified interpreter: {0}", interpreter, null);
+                return interpreter;
             }
             // use the VS instance's default interpreter if there is one
-            if (TryGetInterpreter(PythonToolsPackage.Instance.InterpreterOptionsPage.DefaultInterpreterVersionValue, 
+            SD.Debug.WriteLine("Project specified interpreter not found: {0} - {1}", interpreterId, interpreterVersion);
+            if (TryGetInterpreter(PythonToolsPackage.Instance.InterpreterOptionsPage.DefaultInterpreterVersionValue,
                                     PythonToolsPackage.Instance.InterpreterOptionsPage.DefaultInterpreterValue,
                                     out interpreter, out searchPathEnvVarName, out arch)) {
-                return Path.GetFullPath(interpreter);
+                interpreter = Path.GetFullPath(interpreter);
+                SD.Debug.WriteLine("Using VS default interpreter: {0}", interpreter, null);
+                return interpreter;
             }
             // fail
             Assert.Fail("There were no available interpreters. Could not launch project.");
@@ -356,7 +371,7 @@ namespace DebuggerUITests {
                     break;
                 }
             }
-           
+
             if (interpreter == null) {
                 return false;
             }
@@ -375,7 +390,7 @@ namespace DebuggerUITests {
 //sctpd.SetDebugSpecificCodeTypes();
 
 //foreach (var codeType in sctpd.AvailableCodeTypes.Items) {
-//    if (codeType.Name == "Python Debugging") codeType.SetSelected();
+//    if (codeType.Name == AD7Engine.DebugEngineName) codeType.SetSelected();
 //    else codeType.SetUnselected();
 //}
 

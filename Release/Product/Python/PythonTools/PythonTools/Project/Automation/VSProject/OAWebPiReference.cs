@@ -12,6 +12,7 @@
  *
  * ***************************************************************************/
 
+using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using VSLangProj;
@@ -23,7 +24,8 @@ namespace Microsoft.PythonTools.Project.Automation {
         public OAWebPiReference(WebPiReferenceNode webPiReferenceNode) :
             base(webPiReferenceNode) {
         }
-
+        
+        
         #region Reference override
        
         public override string Name {

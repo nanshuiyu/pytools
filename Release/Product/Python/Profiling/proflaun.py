@@ -5,7 +5,6 @@ the second argument.
 """
 
 import sys
-    
 import vspyprof
 import os
 

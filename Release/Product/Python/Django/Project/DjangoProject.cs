@@ -30,6 +30,7 @@ using System.Xml;
 using Microsoft.PythonTools.Analysis;
 using Microsoft.PythonTools.Django.Intellisense;
 using Microsoft.PythonTools.Parsing.Ast;
+using Microsoft.PythonTools.Project;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
@@ -717,8 +718,15 @@ namespace Microsoft.PythonTools.Django.Project {
         private Process RunManageCommand(string arguments) {
             var pyProj = _innerVsHierarchy.GetPythonInterpreterFactory();
             if (pyProj != null) {
-                var path = pyProj.Configuration.InterpreterPath;
-                var psi = new ProcessStartInfo(path, "manage.py " + arguments);
+                ProcessStartInfo psi;
+                var interpreterPath = pyProj.Configuration.InterpreterPath;
+                var pyProject = _innerVsHierarchy.GetProject().GetPythonProject() as IPythonProject;
+                var managePyPath = (pyProject != null) ? pyProject.GetStartupFile() : null;
+                if (string.IsNullOrEmpty(managePyPath)) {
+                    psi = new ProcessStartInfo(interpreterPath, "manage.py " + arguments);
+                } else {
+                    psi = new ProcessStartInfo(interpreterPath, "\"" + managePyPath + "\" " + arguments);
+                }
 
                 object projectDir;
                 ErrorHandler.ThrowOnFailure(_innerVsHierarchy.GetProperty(
@@ -1161,7 +1169,7 @@ namespace Microsoft.PythonTools.Django.Project {
 
             return ((IOleCommandTarget)_menuService).QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText);
         }
-
+        
         #region IVsProjectFlavorCfgProvider Members
 
         public int CreateProjectFlavorCfg(IVsCfg pBaseProjectCfg, out IVsProjectFlavorCfg ppFlavorCfg) {
@@ -1169,12 +1177,19 @@ namespace Microsoft.PythonTools.Django.Project {
             // want the web application project to influence our config as that alters our debug
             // launch story.  We control that w/ the Django project which is actually just letting the
             // base Python project handle it.  So we keep the base Python project config here.
-            ppFlavorCfg = pBaseProjectCfg as IVsProjectFlavorCfg;
+            IVsProjectFlavorCfg webCfg;
+            ErrorHandler.ThrowOnFailure(
+                _innerVsProjectFlavorCfgProvider.CreateProjectFlavorCfg(
+                    pBaseProjectCfg, 
+                    out webCfg
+                )
+            );
+            ppFlavorCfg = new DjangoProjectConfig(pBaseProjectCfg, webCfg);
             return VSConstants.S_OK;
         }
 
         #endregion
-
+        
         #region IVsProject Members
 
         int IVsProject.AddItem(uint itemidLoc, VSADDITEMOPERATION dwAddItemOperation, string pszItemName, uint cFilesToOpen, string[] rgpszFilesToOpen, IntPtr hwndDlgOwner, VSADDRESULT[] pResult) {

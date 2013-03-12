@@ -17,9 +17,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.PythonTools.Analysis;
 using Microsoft.PythonTools.Intellisense;
@@ -35,19 +37,36 @@ using VsCommands2K = Microsoft.VisualStudio.VSConstants.VSStd2KCmdID;
 namespace Microsoft.PythonTools.Project {
     [Guid(PythonConstants.ProjectNodeGuid)]
     public class PythonProjectNode : CommonProjectNode, IPythonProject, IPythonProject2 {
+        // For files that are analyzed because they were directly or indirectly referenced in the search path, store the information
+        // about the directory from the search path that referenced them in IProjectEntry.Properties[_searchPathEntryKey], so that
+        // they can be located and removed when that directory is removed from the path.
+        private static readonly object _searchPathEntryKey = new { Name = "SearchPathEntry" };
+
         private DesignerContext _designerContext;
         private IPythonInterpreter _interpreter;
         private VsProjectAnalyzer _analyzer;
+        private readonly HashSet<string> _warningFiles = new HashSet<string>();
         private readonly HashSet<string> _errorFiles = new HashSet<string>();
         private bool _defaultInterpreter;
         private PythonDebugPropertyPage _debugPropPage;
         private CommonSearchPathContainerNode _searchPathContainer;
+        private List<VirtualEnvRequestHandler> _virtualEnvCreationRequests;
 
         public PythonProjectNode(CommonProjectPackage package)
             : base(package, Utilities.GetImageList(typeof(PythonProjectNode).Assembly.GetManifestResourceStream(PythonConstants.ProjectImageList))) {
 
             Type projectNodePropsType = typeof(PythonProjectNodeProperties);
             AddCATIDMapping(projectNodePropsType, projectNodePropsType.GUID);
+        }
+
+        private static string GetSearchPathEntry(IProjectEntry entry) {
+            object result;
+            entry.Properties.TryGetValue(_searchPathEntryKey, out result);
+            return (string)result;
+        }
+
+        private static void SetSearchPathEntry(IProjectEntry entry, string value) {
+            entry.Properties[_searchPathEntryKey] = value;
         }
 
         public override CommonFileNode CreateCodeFileNode(MsBuildProjectElement item) {
@@ -152,6 +171,20 @@ namespace Microsoft.PythonTools.Project {
 
             OnProjectPropertyChanged += PythonProjectNode_OnProjectPropertyChanged;
             base.Reload();
+        }
+
+        protected internal override void ProcessReferences() {
+            base.ProcessReferences();
+
+            var virtualEnv = GetVirtualEnvContainerNode();
+            if (virtualEnv == null) {
+                virtualEnv = new VirtualEnvContainerNode(this);
+                AddChild(virtualEnv);
+            }
+
+            foreach (var buildItem in BuildProject.GetItems(PythonConstants.VirtualEnvItemType)) {
+                virtualEnv.AddChild(new VirtualEnvNode(this, buildItem));
+            }
         }
 
         private void RefreshCurrentWorkingDirectory() {
@@ -278,24 +311,15 @@ namespace Microsoft.PythonTools.Project {
                     // we need to remove old files from the analyzer and add the new files
                     HashSet<string> oldDirs = new HashSet<string>(ParseSearchPath(e.OldValue), StringComparer.OrdinalIgnoreCase);
                     HashSet<string> newDirs = new HashSet<string>(ParseSearchPath(e.NewValue), StringComparer.OrdinalIgnoreCase);
+
                     // figure out all the possible directory names we could be removing...
                     foreach (var fileProject in _analyzer.LoadedFiles) {
-                        var file = fileProject.Key;
-                        var projectEntry = fileProject.Value;
-
-                        // remove the file if directly included, or if included via a package or series of packages.
-                        string dirName = Path.GetDirectoryName(file);
-                        do {
-                            string tmpDir = CommonUtils.NormalizeDirectoryPath(dirName);
-                            if (oldDirs.Contains(tmpDir)) {
-                                if (!newDirs.Contains(tmpDir)) {
-                                    // path removed
-                                    _analyzer.UnloadFile(projectEntry);
-                                    break;
-                                }
-                            }
-                            dirName = Path.GetDirectoryName(dirName);
-                        } while (dirName != null && File.Exists(Path.Combine(dirName, "__init__.py")));
+                        string file = fileProject.Key;
+                        IProjectEntry projectEntry = fileProject.Value;
+                        string searchPathEntry = GetSearchPathEntry(fileProject.Value);
+                        if (searchPathEntry != null && !newDirs.Contains(searchPathEntry)) {
+                            _analyzer.UnloadFile(projectEntry);
+                        }
                     }
 
                     // find the values only in the old list, and let the analyzer know it shouldn't be watching those dirs
@@ -317,7 +341,14 @@ namespace Microsoft.PythonTools.Project {
         private void AnalyzeSearchPaths(IEnumerable<string> newDirs) {
             // now add all of the missing files, any dups will automatically not be re-analyzed
             foreach (var dir in newDirs) {
-                _analyzer.AnalyzeDirectory(dir);
+#if DEV11
+                // If it's a file and not a directory, parse it as a .zip file in accordance with PEP 273.
+                if (File.Exists(dir)) {
+                    _analyzer.AnalyzeZipArchive(dir, onFileAnalyzed: entry => SetSearchPathEntry(entry, dir));
+                    continue;
+                }
+#endif
+                _analyzer.AnalyzeDirectory(dir, onFileAnalyzed: entry => SetSearchPathEntry(entry, dir));
             }
         }
 
@@ -365,27 +396,23 @@ namespace Microsoft.PythonTools.Project {
         }
 
         public override void BeforeClose() {
-            if (this.ErrorFiles.Count > 0) {
-                var analyzer = GetAnalyzer();
-                analyzer.BeginUnload();
-                try {
+            if (_analyzer != null) {
+                _analyzer.Cancel();
+
+                if (this.WarningFiles.Count > 0 || this.ErrorFiles.Count > 0) {
                     foreach (var node in EnumNodesOfType<PythonFileNode>()) {
-                        analyzer.UnloadFile(node.GetAnalysis());
+                        _analyzer.UnloadFile(node.GetAnalysis(), suppressUpdate: true);
                     }
-                } finally {
-                    analyzer.EndUnload();
                 }
+
+                _analyzer.Dispose();
+                _analyzer = null;
             }
 
             DisposeInterpreter();
 
             if (_defaultInterpreter) {
                 PythonToolsPackage.Instance.InterpreterOptionsPage.DefaultInterpreterChanged -= DefaultInterpreterChanged;
-            }
-
-            if (_analyzer != null) {
-                _analyzer.Dispose();
-                _analyzer = null;
             }
         }
 
@@ -449,6 +476,15 @@ namespace Microsoft.PythonTools.Project {
         public HashSet<string> ErrorFiles {
             get {
                 return _errorFiles;
+            }
+        }
+
+        /// <summary>
+        /// File names within the project which contain warnings.
+        /// </summary>
+        public HashSet<string> WarningFiles {
+            get {
+                return _warningFiles;
             }
         }
 
@@ -590,6 +626,7 @@ namespace Microsoft.PythonTools.Project {
             if (cmdGroup == GuidList.guidPythonToolsCmdSet) {
                 switch ((int)cmd) {
                     case CommonConstants.AddSearchPathCommandId:
+                    case CommonConstants.AddSearchPathZipCommandId:
                     case CommonConstants.StartWithoutDebuggingCmdId:
                         result |= QueryStatusResult.SUPPORTED | QueryStatusResult.ENABLED;
                         return VSConstants.S_OK;
@@ -641,5 +678,259 @@ namespace Microsoft.PythonTools.Project {
         }
 
         #endregion
+
+        #region Virtual Env support
+
+        internal int CreateVirtualEnv() {
+            var view = new CreateVirtualEnvironmentView(true);
+            if (view.AvailableInterpreters.Count == 0) {
+                MessageBox.Show("There are no configured interpreters available to create a virtual environment.\r\n\r\nPlease install a Python interpreter or register one in Tools->Options->Python Tools->Interpreters");
+                return VSConstants.S_OK;
+            }
+
+            const string baseName = "env";
+            view.Location = ProjectHome;
+            view.Name = baseName;
+            if (Directory.Exists(Path.Combine(view.Location, view.Name))) {
+                for (int i = 1; i < Int32.MaxValue; i++) {
+                    if (!Directory.Exists(Path.Combine(view.Location, baseName + i))) {
+                        view.Name = baseName + i;
+                        break;
+                    }
+                }
+            }
+
+            SelectDefaultVirtualEnvInterpreter(view);
+
+            var createVirtualEnv = new CreateVirtualEnvironment(view);
+            var res = createVirtualEnv.ShowDialog();
+            if (res != null && res.Value) {
+                var psi = new ProcessStartInfo(view.Interpreter.Path, "-m virtualenv " + view.Name);
+                psi.WorkingDirectory = view.Location;
+
+                EnqueueVirtualEnvRequest(
+                    psi, 
+                    "Creating virtual environment...", 
+                    "Virtual environment created successfully", 
+                    "Error in creating virtual environment: {0}", 
+                    () => AddVirtualEnvPath(Path.Combine(view.Location, view.Name), view.Interpreter.Version, view.Interpreter.Id)
+                );
+            }
+            return VSConstants.S_OK;
+        }
+
+        private void SelectDefaultVirtualEnvInterpreter(CreateVirtualEnvironmentView view) {
+            var curInterpreter = GetInterpreterFactory();
+            foreach (var interpreter in view.AvailableInterpreters) {
+                if (interpreter.Id == curInterpreter.Id &&
+                    interpreter.Version == curInterpreter.Configuration.Version) {
+                    view.Interpreter = interpreter;
+                    break;
+                }
+            }
+        }
+
+        internal void EnqueueVirtualEnvRequest(ProcessStartInfo psi, string initialMsg, string success, string error, Action onSuccess, Action onError = null) {
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            psi.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
+
+            if (_virtualEnvCreationRequests == null) {
+                _virtualEnvCreationRequests = new List<VirtualEnvRequestHandler>();
+            }
+
+            // make sure we have the General pane, it's not created for us in VS 2010
+            IVsOutputWindow outputWindow = GetService(typeof(SVsOutputWindow)) as IVsOutputWindow;
+            IVsOutputWindowPane pane;
+            outputWindow.CreatePane(VSConstants.OutputWindowPaneGuid.GeneralPane_guid, "General", 1, 0);
+            outputWindow.GetPane(VSConstants.OutputWindowPaneGuid.GeneralPane_guid, out pane);
+            
+            var process = Process.Start(psi);
+            var handler = new VirtualEnvRequestHandler(
+                pane,
+                process,
+                this,
+                onSuccess,
+                onError,
+                TaskScheduler.FromCurrentSynchronizationContext(),
+                success,
+                error);
+            
+            lock (_virtualEnvCreationRequests) {
+                // keep the Process object alive so we receive events even after GC
+                _virtualEnvCreationRequests.Add(handler);
+            }
+            
+            process.Exited += handler.VirtualEnvCreationExited;
+            process.EnableRaisingEvents = true;
+            process.OutputDataReceived += handler.CreateVirtualEnvOutputDataReceived;
+            process.ErrorDataReceived += handler.CreateVirtualEnvOutputDataReceived;
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            var statusBar = (IVsStatusbar)CommonPackage.GetGlobalService(typeof(SVsStatusbar));
+            statusBar.SetText(initialMsg + SeeOutputWindowForMoreDetails);
+            
+            pane.Activate();
+            pane.OutputString(initialMsg + Environment.NewLine);
+        }
+
+        const string SeeOutputWindowForMoreDetails = " (See Output Window for more details)";
+
+        class VirtualEnvRequestHandler {
+            private readonly string _success, _error;
+            private readonly PythonProjectNode _node;
+            private readonly TaskScheduler _scheduler;
+            private readonly Action _onSuccess, _onError;
+            private readonly Process _process;
+            private readonly IVsOutputWindowPane _outPane;
+
+            public VirtualEnvRequestHandler(IVsOutputWindowPane outPane, Process process, PythonProjectNode node, Action onSuccess, Action onError, TaskScheduler scheduler, string success, string error) {
+                _outPane = outPane;
+                _process = process;
+                _node = node;
+                _scheduler = scheduler;
+                _onSuccess = onSuccess;
+                _onError = onError;
+                _scheduler = scheduler;
+                _success = success;
+                _error = error;
+            }
+
+            public void VirtualEnvCreationExited(object sender, EventArgs e) {
+                lock (_node._virtualEnvCreationRequests) {
+                    // no longer keep the process object alive.
+                    _node._virtualEnvCreationRequests.Remove(this);
+                }
+
+                var proc = (Process)sender;
+
+                var statusBar = (IVsStatusbar)CommonPackage.GetGlobalService(typeof(SVsStatusbar));                
+
+                if (proc.ExitCode == 0) {
+                    statusBar.SetText(_success + SeeOutputWindowForMoreDetails);
+                    if (_outPane != null) {
+                        _outPane.OutputStringThreadSafe(_success + Environment.NewLine);
+                    }
+                    _scheduler.StartNew(_onSuccess).Wait();
+                } else {
+                    var msg = String.Format(_error, proc.ExitCode);
+                    statusBar.SetText(_error + SeeOutputWindowForMoreDetails);
+                    if (_outPane != null) {
+                        _outPane.OutputStringThreadSafe(msg + Environment.NewLine);
+                    }
+                    if (_onError != null) {
+                        _scheduler.StartNew(_onError).Wait();
+                    }
+                }
+            }
+
+            public void CreateVirtualEnvOutputDataReceived(object sender, DataReceivedEventArgs e) {
+                if (_outPane != null && e.Data != null) {
+                    _outPane.OutputStringThreadSafe(e.Data + Environment.NewLine);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Executes Add Search Path menu command.
+        /// </summary>        
+        internal int AddVirtualEnv() {
+            var view = new CreateVirtualEnvironmentView(false);
+            if (view.AvailableInterpreters.Count == 0) {
+                MessageBox.Show("There are no configured base interpreters available to register a virtual environment.\r\n\r\nPlease install a Python interpreter or register one in Tools->Options->Python Tools->Interpreters");
+                return VSConstants.S_OK;
+            }
+
+            SelectDefaultVirtualEnvInterpreter(view);
+            view.Location = ProjectHome;
+
+            var createVirtualEnv = new CreateVirtualEnvironment(view);
+            var res = createVirtualEnv.ShowDialog();
+            if (res ?? false) {
+                AddVirtualEnvPath(view.Location, view.Interpreter.Version, view.Interpreter.Id);
+            }
+            return VSConstants.S_OK;
+        }
+
+        /// <summary>
+        /// Adds new search path to the SearchPath project property.
+        /// </summary>
+        internal void AddVirtualEnvPath(string newpath, Version version, Guid interpreterId) {
+            Utilities.ArgumentNotNull("newpath", newpath);
+
+            var relativePath = CommonUtils.TrimEndSeparator(CommonUtils.GetRelativeDirectoryPath(ProjectHome, CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, newpath)));
+            var items = BuildProject.GetItems(PythonConstants.VirtualEnvItemType);
+            foreach (var item in items) {
+                if (CommonUtils.IsSameDirectory(
+                    CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, item.EvaluatedInclude),
+                    CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, relativePath))) {
+                    // item already exists
+                    return;
+                }
+            }
+
+            //Make sure we can edit the project file
+            if (!QueryEditProjectFile(false)) {
+                throw Marshal.GetExceptionForHR(VSConstants.OLE_E_PROMPTSAVECANCELLED);
+            }
+
+            var newItem = BuildProject.AddItem(PythonConstants.VirtualEnvItemType, relativePath).First();
+            newItem.SetMetadataValue(PythonConstants.VirtualEnvInterpreterId, interpreterId.ToString());
+            newItem.SetMetadataValue(PythonConstants.VirtualEnvInterpreterVersion, version.ToString());
+            GetVirtualEnvContainerNode().AddChild(new VirtualEnvNode(this, newItem));
+            SetProjectFileDirty(true);
+        }
+
+        /// <summary>
+        /// Removes a given path from the SearchPath property.
+        /// </summary>
+        internal void RemoveVirtualEnvPath(string path) {
+            Utilities.ArgumentNotNull("path", path);
+
+            var relativePath = CommonUtils.TrimEndSeparator(CommonUtils.GetRelativeDirectoryPath(ProjectHome, CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, path)));
+            var items = BuildProject.GetItems(PythonConstants.VirtualEnvItemType);
+            foreach (var item in items) {
+                if (CommonUtils.IsSameDirectory(
+                    CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, item.EvaluatedInclude),
+                    CommonUtils.GetAbsoluteDirectoryPath(ProjectHome, relativePath))) {
+                    //Make sure we can edit the project file
+                    if (!QueryEditProjectFile(false)) {
+                        throw Marshal.GetExceptionForHR(VSConstants.OLE_E_PROMPTSAVECANCELLED);
+                    }
+
+                    BuildProject.RemoveItem(item);
+                    SetProjectFileDirty(true);
+
+                    var venvContainer = GetVirtualEnvContainerNode();
+                    for (var curItem = venvContainer.FirstChild; curItem != null; curItem = curItem.NextSibling) {
+                        if (((MsBuildProjectElement)curItem.ItemNode).Item.UnevaluatedInclude == item.UnevaluatedInclude) {
+                            venvContainer.RemoveChild(curItem);
+                            OnInvalidateItems(venvContainer);
+                            break;
+                        }
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns the reference container node.
+        /// </summary>
+        internal VirtualEnvContainerNode GetVirtualEnvContainerNode() {
+            for (var child = this.FirstChild; child != null; child = child.NextSibling) {
+                if (child is VirtualEnvContainerNode) {
+                    return (VirtualEnvContainerNode)child;
+                }
+            }
+            return null;
+        }
+
+        #endregion
+
     }
 }

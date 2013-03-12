@@ -16,7 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-
+using System.Threading;
 using Microsoft.PythonTools.Analysis.Values;
 using Microsoft.PythonTools.Parsing.Ast;
 
@@ -25,25 +25,57 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         internal AnalysisUnit _unit;
         internal ExpressionEvaluator _eval;
         private SuiteStatement _curSuite;
-        private InterpreterScope[] _curScopes;
 
-        public void Analyze(Deque<AnalysisUnit> queue) {
-            while (queue.Count > 0) {
+        public void Analyze(Deque<AnalysisUnit> queue, CancellationToken cancel) {
+            if (cancel.IsCancellationRequested) {
+                return;
+            }
+            
+            // Including a marker at the end of the queue allows us to see in
+            // the log how frequently the queue empties.
+            var endOfQueueMarker = new AnalysisUnit(null, null);
+            int queueCountAtStart = queue.Count;
+
+            if (queueCountAtStart > 0) {
+                queue.Append(endOfQueueMarker);
+            }
+
+            while (queue.Count > 0 && !cancel.IsCancellationRequested) {
                 _unit = queue.PopLeft();
+
+                if (_unit == endOfQueueMarker) {
+                    AnalysisLog.EndOfQueue(queueCountAtStart, queue.Count);
+                    queueCountAtStart = queue.Count;
+                    if (queueCountAtStart > 0) {
+                        queue.Append(endOfQueueMarker);
+                    }
+                    continue;
+                }
+
+                AnalysisLog.Dequeue(queue, _unit);
+
                 _unit.IsInQueue = false;
-                
-                _unit.Analyze(this);
+                SetCurrentUnit(_unit);
+                _unit.Analyze(this, cancel);
+            }
+
+            if (cancel.IsCancellationRequested) {
+                AnalysisLog.Cancelled(queue);
             }
         }
 
         public void SetCurrentUnit(AnalysisUnit unit) {
             _eval = new ExpressionEvaluator(unit);
             _unit = unit;
-            _curScopes = _unit.Scopes;
         }
 
-        public InterpreterScope[] Scopes {
-            get { return _curScopes; }
+        public InterpreterScope Scope {
+            get {
+                return _eval.Scope;
+            }
+            set {
+                _eval.Scope = value;
+            }
         }
 
         public ModuleInfo GlobalScope {
@@ -79,13 +111,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         private T CurrentContainer<T>() where T : InterpreterScope {
-            for (int i = Scopes.Length - 1; i >= 0; i--) {
-                T result = Scopes[i] as T;
-                if (result != null) {
-                    return result;
-                }
-            }
-            return null;
+            return Scope.EnumerateTowardsGlobal.OfType<T>().FirstOrDefault();
         }
 
         public override bool Walk(AssignmentStatement node) {
@@ -113,12 +139,9 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         public override bool Walk(NonlocalStatement node) {
-            foreach (var name in node.Names) {
-                for (int i = Scopes.Length - 2; i >= 0; i--) {
-                    var var = Scopes[i].GetVariable(name, _unit, name.Name);
-                    if (var != null) {
-                        break;
-                    }
+            if (Scope.OuterScope != null) {
+                foreach (var name in node.Names) {
+                    Scope.OuterScope.GetVariable(name, _unit, name.Name);
                 }
             }
             return false;
@@ -141,7 +164,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
                         _eval.AssignTo(node, node.Left, listType.GetEnumeratorTypes(node, _unit));
                     }
                 } else {
-                    _eval.AssignTo(node, node.Left, EmptySet<Namespace>.Instance);
+                    _eval.AssignTo(node, node.Left, NamespaceSet.Empty);
                 }
             }
 
@@ -155,50 +178,30 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
             return false;
         }
 
-        private void WalkFromImportWorker(NameExpression node, Namespace userMod, string impName, string newName) {
+        private void WalkFromImportWorker(NameExpression node, IModule userMod, string impName, string newName) {
             var saveName = (newName == null) ? impName : newName;
 
             bool addRef = node.Name != "*";
 
-            var variable = Scopes[Scopes.Length - 1].CreateVariable(node, _unit, saveName, addRef);
-
-            ISet<Namespace> newTypes = EmptySet<Namespace>.Instance;
-            bool madeSet = false;
-
-            // look for builtin / user-defined modules first
-            ModuleInfo module = userMod as ModuleInfo;
-            if (module != null) {
-                var importedValue = module.Scope.CreateVariable(node, _unit, impName, addRef);
-                Scopes[Scopes.Length - 1].GetLinkedVariables(saveName).Add(importedValue);
-
-                newTypes = newTypes.Union(importedValue.Types, ref madeSet);
-                importedValue.AddDependency(_unit);
+            var variable = Scope.CreateVariable(node, _unit, saveName, addRef);
+            if (userMod != null) {
+                variable.AddTypes(_unit, userMod.GetModuleMember(node, _unit, impName, addRef, Scope, saveName));
             }
 
-            BuiltinModule builtinModule = userMod as BuiltinModule;
-            if (builtinModule != null) {
-                var importedValue = builtinModule.GetMember(node, _unit, impName);
-
-                newTypes = newTypes.Union(importedValue, ref madeSet);
-
-                builtinModule.InterpreterModule.Imported(_unit.DeclaringModule.InterpreterContext);
-            }
-
-            variable.AddTypes(_unit, newTypes);
-            if (node.Name != "*") {
+            if (addRef) {
                 variable.AddAssignment(node, _unit);
             }
         }
 
         public override bool Walk(FromImportStatement node) {
             ModuleReference moduleRef;
-            Namespace userMod = null;
+            IModule userMod = null;
             RelativeModuleName relativeName = node.Root as RelativeModuleName;
             if (relativeName != null) {
                 // attempt relative import...
                 var curPackage = GlobalScope;
                 int dotCount = relativeName.DotCount;
-                if (curPackage.ProjectEntry.FilePath.EndsWith("\\__init__.py") || 
+                if (curPackage.ProjectEntry.FilePath.EndsWith("\\__init__.py") ||
                     curPackage.ProjectEntry.FilePath.EndsWith("\\__init__.pyw")) {
                     // relative import from inside of a package definition, we don't go out
                     // of our own package.
@@ -225,7 +228,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
 
                 if (moduleRef != null) {
                     if (moduleRef.Module != null) {
-                        userMod = moduleRef.Module;
+                        userMod = moduleRef.Module as IModule;
                         if (userMod == null) {
                             moduleRef.AddEphemeralReference(_unit.DeclaringModule);
                         }
@@ -250,7 +253,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
                 } else if (impName == "*") {
                     // Handle "import *"
                     if (userMod != null) {
-                        foreach (var varName in GetModuleKeys(userMod)) {
+                        foreach (var varName in userMod.GetModuleMemberNames(GlobalScope.InterpreterContext)) {
                             if (!varName.StartsWith("_")) {
                                 WalkFromImportWorker(nameNode, userMod, varName, null);
                             }
@@ -265,8 +268,8 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         private bool TryGetUserModule(string modName, out ModuleReference moduleRef) {
-            if (ProjectState.CrossModuleAnalysisLimit != null &&
-                ProjectState.ModulesByFilename.Count > ProjectState.CrossModuleAnalysisLimit) {
+            if (ProjectState.Limits.CrossModule != null &&
+                ProjectState.ModulesByFilename.Count > ProjectState.Limits.CrossModule) {
                 // too many modules loaded, disable cross module analysis by blocking
                 // scripts from seeing other modules.
                 moduleRef = null;
@@ -292,21 +295,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
             return false;
         }
 
-        private ICollection<string> GetModuleKeys(Namespace userMod) {
-            ModuleInfo mi = userMod as ModuleInfo;
-            if (mi != null) {
-                return mi.Scope.Variables.Keys;
-            }
-
-            BuiltinModule bmi = userMod as BuiltinModule;
-            if (bmi != null) {
-                return bmi.GetMemberNames(GlobalScope.InterpreterContext).ToArray();
-            }
-
-            return new string[0];
-        }
-
-        internal List<Namespace> LookupBaseMethods(string name, IEnumerable<ISet<Namespace>> bases, Node node, AnalysisUnit unit) {
+        internal List<Namespace> LookupBaseMethods(string name, IEnumerable<INamespaceSet> bases, Node node, AnalysisUnit unit) {
             var result = new List<Namespace>();
             foreach (var b in bases) {
                 foreach (var curType in b) {
@@ -322,48 +311,27 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
             return result;
         }
 
-        internal void PropagateBaseParams(FunctionInfo newScope, BuiltinMethodInfo method) {
-            foreach (var overload in method.Function.Overloads) {
-                var p = overload.GetParameters();
-                if (p.Length + 1 == newScope.ParameterTypes.Length) {
-                    for (int i = 0; i < p.Length; i++) {
-                        var baseParam = p[i];
-                        var baseType = ProjectState.GetNamespaceFromObjects(baseParam.ParameterType);
-                        newScope.AddParameterType(_unit, baseType, i);
-                    }
-                }
-            }
-        }
-
-       
-
         public override bool Walk(FunctionDefinition node) {
             InterpreterScope funcScope;
-            if (_unit.DeclaringModule.NodeScopes.TryGetValue(node, out funcScope)) {
+            if (_unit.Scope.TryGetNodeScope(node, out funcScope)) {
                 var function = ((FunctionScope)funcScope).Function;
-                var analysisUnit = (FunctionAnalysisUnit)((FunctionScope)funcScope).Function._analysisUnit;
+                var analysisUnit = (FunctionAnalysisUnit)((FunctionScope)funcScope).Function.AnalysisUnit;
 
-                var curClass = analysisUnit.Scopes[Scopes.Length - 1] as ClassScope;
+                var curClass = Scope as ClassScope;
                 if (curClass != null) {
-                    // wire up information about the class
-                    // TODO: Should follow MRO
                     var bases = LookupBaseMethods(
-                        analysisUnit.Ast.Name, 
-                        curClass.Class.Bases, 
-                        analysisUnit.Ast, 
+                        analysisUnit.Ast.Name,
+                        curClass.Class.Mro,
+                        analysisUnit.Ast,
                         analysisUnit
                     );
-                    foreach (var ns in bases) {
-                        BuiltinMethodInfo methodInfo = ns as BuiltinMethodInfo;
-                        if (methodInfo != null) {
-                            PropagateBaseParams(function, methodInfo);
+                    foreach (var method in bases.OfType<BuiltinMethodInfo>()) {
+                        foreach (var overload in method.Function.Overloads) {
+                            function.UpdateDefaultParameters(_unit, overload.GetParameters());
                         }
                     }
                 }
-
-                analysisUnit.ProcessFunctionDecorators(this, analysisUnit.Ast, function);
-                analysisUnit.AnalyzeDefaultParameters(this, function);
-            }           
+            }
 
             return false;
         }
@@ -382,7 +350,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         public override bool Walk(IfStatement node) {
-            foreach (var test in node.Tests) {               
+            foreach (var test in node.Tests) {
                 _eval.Evaluate(test.Test);
 
                 TryPushIsInstanceScope(test, test.Test);
@@ -433,14 +401,15 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
 
                 ModuleReference modRef;
 
-                var def = Scopes[Scopes.Length - 1].CreateVariable(nameNode, _unit, saveName);
+                var def = Scope.CreateVariable(nameNode, _unit, saveName);
                 if (!TryGetUserModule(importing, out modRef)) {
                     var builtinModule = ProjectState.ImportBuiltinModule(importing, bottom);
+                    var ns = builtinModule as Namespace;
 
-                    if (builtinModule != null) {
-                        builtinModule.InterpreterModule.Imported(_unit.DeclaringModule.InterpreterContext);
+                    if (builtinModule != null && ns != null) {
+                        builtinModule.Imported(_unit);
 
-                        def.AddTypes(_unit, builtinModule.SelfSet);
+                        def.AddTypes(_unit, ns);
                         def.AddAssignment(nameNode, _unit);
                         continue;
                     }
@@ -448,17 +417,9 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
 
                 if (modRef != null) {
                     if (modRef.Module != null) {
-                        ModuleInfo mi = modRef.Module as ModuleInfo;
-                        if (mi != null) {
-                            mi.ModuleDefinition.AddDependency(_unit);
-                        }
+                        modRef.Module.Imported(_unit);
 
-                        BuiltinModule builtinModule = modRef.Module as BuiltinModule;
-                        if (builtinModule != null) {
-                            builtinModule.InterpreterModule.Imported(_unit.DeclaringModule.InterpreterContext);
-                        }
-
-                        def.AddTypes(_unit, modRef.Module.SelfSet);
+                        def.AddTypes(_unit, modRef.Namespace);
                         def.AddAssignment(nameNode, _unit);
                         continue;
                     } else {
@@ -473,18 +434,10 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         public override bool Walk(ReturnStatement node) {
-            var curFunc = CurrentFunction;
-            if (node.Expression != null && curFunc != null) {
+            var fnScope = CurrentFunction;
+            if (node.Expression != null && fnScope != null) {
                 var lookupRes = _eval.Evaluate(node.Expression);
-
-                var retVal = curFunc.Function.ReturnValue;
-                int typeCount = retVal.TypesNoCopy.Count;
-                foreach (var type in lookupRes) {
-                    retVal.AddTypes(_unit, type);
-                }
-                if (typeCount != retVal.TypesNoCopy.Count) {
-                    retVal.EnqueueDependents();
-                }
+                fnScope.AddReturnTypes(node, _unit, lookupRes);
             }
             return true;
         }
@@ -516,10 +469,10 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         }
 
         private void TryPushIsInstanceScope(Node node, Expression test) {
-            InterpreterScope scope;
-            if (_unit.DeclaringModule.NodeScopes.TryGetValue(node, out scope)) {
-                var outerScope = Scopes[Scopes.Length - 1];
-                var isInstanceScope = (IsInstanceScope)scope;
+            InterpreterScope newScope;
+            if (Scope.TryGetNodeScope(node, out newScope)) {
+                var outerScope = Scope;
+                var isInstanceScope = (IsInstanceScope)newScope;
 
                 // magic assert isinstance statement alters the type information for a node
                 var namesAndExpressions = OverviewWalker.GetIsInstanceNamesAndExpressions(test);
@@ -528,72 +481,28 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
                     var type = nameAndExpr.Value;
 
                     var typeObj = _eval.EvaluateMaybeNull(type);
-                    var variable = scope.CreateVariable(node, _unit, name, false);
-
-                    PropagateIsInstanceTypes(node, typeObj, variable);
-
-                    isInstanceScope.OuterVariables[name] = outerScope.CreateVariable(node, _unit, name, false);
+                    isInstanceScope.CreateTypedVariable(name, _unit, name.Name, typeObj);
                 }
 
                 // push the scope, it will be popped when we leave the current SuiteStatement.
-                _curScopes = _eval.PushScope(scope);
+                Scope = newScope;
             }
         }
 
         public override bool Walk(SuiteStatement node) {
             var prevSuite = _curSuite;
+            var prevScope = Scope;
+
             _curSuite = node;
             if (node.Statements != null) {
-                foreach(var statement in node.Statements) {
+                foreach (var statement in node.Statements) {
                     statement.Walk(this);
                 }
             }
 
-            IsInstanceScope isInstanceScope = Scopes[Scopes.Length - 1] as IsInstanceScope;
-            if (isInstanceScope != null && isInstanceScope._effectiveSuite == node) {
-                // pop the scope
-                Debug.Assert(_curScopes[_curScopes.Length - 1] is IsInstanceScope);
-                if (_curScopes.Length - 1 == _unit.Scopes.Length) {
-                    // common case, only 1 level deep of asserts
-                    _curScopes = _unit.Scopes;
-                } else {
-                    // restore scopes array by making a copy
-                    var newScopes = new InterpreterScope[_curScopes.Length - 1];
-                    for (int i = 0; i < newScopes.Length; i++) {
-                        newScopes[i] = _curScopes[i];
-                    }
-                    _curScopes = newScopes;
-                }
-                _eval._currentScopes = _curScopes;
-            }
-
+            Scope = prevScope;
             _curSuite = prevSuite;
             return false;
-        }
-
-        private void PropagateIsInstanceTypes(Node node, ISet<Namespace> typeSet, VariableDef variable) {
-            foreach (var typeObj in typeSet) {
-                ClassInfo classInfo = typeObj as ClassInfo;
-                if (classInfo != null) {
-                    variable.AddTypes(_unit, classInfo.Instance);
-                } else {
-                    BuiltinClassInfo builtinClassInfo = typeObj as BuiltinClassInfo;
-                    if (builtinClassInfo != null) {
-                        variable.AddTypes(_unit, builtinClassInfo.Instance);
-                    } else {
-                        SequenceInfo seqInfo = typeObj as SequenceInfo;
-                        if (seqInfo != null && seqInfo.Push()) {
-                            try {
-                                foreach (var indexVar in seqInfo.IndexTypes) {
-                                    PropagateIsInstanceTypes(node, indexVar.Types, variable);
-                                }
-                            } finally {
-                                seqInfo.Pop();
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         public override bool Walk(DelStatement node) {
@@ -606,7 +515,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
         private void DeleteExpression(Expression expr) {
             NameExpression name = expr as NameExpression;
             if (name != null) {
-                var var = Scopes[Scopes.Length - 1].CreateVariable(name, _unit, name.Name);
+                var var = Scope.CreateVariable(name, _unit, name.Name);
 
                 return;
             }
@@ -668,8 +577,7 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
             node.Body.Walk(this);
             if (node.Handlers != null) {
                 foreach (var handler in node.Handlers) {
-                    ISet<Namespace> test = EmptySet<Namespace>.Instance;
-                    bool madeSet = false;
+                    var test = NamespaceSet.Empty;
                     if (handler.Test != null) {
                         var testTypes = _eval.Evaluate(handler.Test);
 
@@ -677,12 +585,12 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
                             foreach (var type in testTypes) {
                                 ClassInfo klass = type as ClassInfo;
                                 if (klass != null) {
-                                    test = test.Union(klass.Instance.SelfSet, ref madeSet);
+                                    test = test.Union(klass.Instance.SelfSet);
                                 }
 
                                 BuiltinClassInfo builtinClass = type as BuiltinClassInfo;
                                 if (builtinClass != null) {
-                                    test = test.Union(builtinClass.Instance.SelfSet, ref madeSet);
+                                    test = test.Union(builtinClass.Instance.SelfSet);
                                 }
                             }
 
@@ -716,6 +624,6 @@ namespace Microsoft.PythonTools.Analysis.Interpreter {
                 _eval.Evaluate(node.Globals);
             }
             return false;
-        }        
+        }
     }
 }

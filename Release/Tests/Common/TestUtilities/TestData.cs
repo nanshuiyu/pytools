@@ -12,6 +12,7 @@
  *
  * ***************************************************************************/
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -21,7 +22,7 @@ using Microsoft.PythonTools;
 
 namespace TestUtilities {
     public static class TestData {
-        const string BinariesAltSourcePath = @"Binaries\";
+        const string BinariesAltSourcePath = @"Binaries";
         const string BinariesSourcePath = @"Binaries\" +
 #if DEBUG
             @"Debug" + 
@@ -29,15 +30,15 @@ namespace TestUtilities {
             @"Release" + 
 #endif
 #if DEV11
-            @"11.0\";
+            @"11.0";
 #else
-            @"10.0\";
+            @"10.0";
 #endif
         const string BinariesOutPath = "";
 
-        const string DataAltSourcePath = @"TestData\";
-        const string DataSourcePath = @"Release\Tests\Common\TestData\";
-        const string DataOutPath = @"TestData\";
+        const string DataAltSourcePath = @"TestData";
+        const string DataSourcePath = @"Release\Tests\Common\TestData";
+        const string DataOutPath = @"TestData";
 
         private static string GetSolutionDir() {
             var dir = Path.GetDirectoryName((typeof(TestData)).Assembly.Location);
@@ -48,6 +49,8 @@ namespace TestUtilities {
         }
 
         private static void CopyFiles(string sourceDir, string destDir) {
+            sourceDir = sourceDir.TrimEnd('\\');
+            destDir = destDir.TrimEnd('\\');
             try {
                 Directory.CreateDirectory(destDir);
             } catch (IOException) {
@@ -55,10 +58,10 @@ namespace TestUtilities {
             
             var newDirectories = new HashSet<string>(from d in Directory.EnumerateDirectories(sourceDir, "*", SearchOption.AllDirectories)
                                                      where d.StartsWith(sourceDir)
-                                                     select d.Substring(sourceDir.Length));
+                                                     select d.Substring(sourceDir.Length + 1), StringComparer.OrdinalIgnoreCase);
             newDirectories.ExceptWith(from d in Directory.EnumerateDirectories(destDir, "*", SearchOption.AllDirectories)
                                       where d.StartsWith(destDir)
-                                      select d.Substring(destDir.Length));
+                                      select d.Substring(destDir.Length + 1));
 
             foreach (var newDir in newDirectories.OrderBy(i => i.Length).Select(i => Path.Combine(destDir, i))) {
                 try {
@@ -70,10 +73,10 @@ namespace TestUtilities {
 
             var newFiles = new HashSet<string>(from f in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories)
                                                where f.StartsWith(sourceDir)
-                                               select f.Substring(sourceDir.Length));
+                                               select f.Substring(sourceDir.Length + 1), StringComparer.OrdinalIgnoreCase);
             newFiles.ExceptWith(from f in Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories)
                                 where f.StartsWith(destDir)
-                                select f.Substring(destDir.Length));
+                                select f.Substring(destDir.Length + 1));
 
             foreach (var newFile in newFiles) {
                 var copyFrom = Path.Combine(sourceDir, newFile);
@@ -87,9 +90,13 @@ namespace TestUtilities {
             }
         }
 
-        public static void Deploy() {
+        public static void Deploy(string dataSourcePath = null, bool includeTestData = true) {
             var sourceRoot = GetSolutionDir();
             var deployRoot = Path.GetDirectoryName((typeof(TestData)).Assembly.Location);
+
+            if (deployRoot.Length < 5) {
+                Debug.Fail("Invalid deploy root", string.Format("sourceRoot={0}\ndeployRoot={1}", sourceRoot, deployRoot));
+            }
 
             var binSource = Path.Combine(sourceRoot, BinariesSourcePath);
             if (!Directory.Exists(binSource)) {
@@ -101,19 +108,26 @@ namespace TestUtilities {
 
             var binDest = Path.Combine(deployRoot, BinariesOutPath);
             if (binSource == binDest) {
-                Debug.Fail("Select the default.testsettings file before running tests.");
-            }
-
-            var dataSource = Path.Combine(sourceRoot, DataSourcePath);
-            if (!Directory.Exists(dataSource)) {
-                dataSource = Path.Combine(sourceRoot, DataAltSourcePath);
-                if (!Directory.Exists(dataSource)) {
-                    Debug.Fail("Could not find location of test data.");
+                if (includeTestData) {
+                    Debug.Fail("Running tests inside build directory", "Select the default.testsettings file before running tests.");
+                } else {
+                    return;
                 }
             }
 
             CopyFiles(binSource, binDest);
-            CopyFiles(dataSource, Path.Combine(deployRoot, DataOutPath));
+
+            if (includeTestData) {
+                var dataSource = Path.Combine(sourceRoot, dataSourcePath ?? DataSourcePath);
+                if (!Directory.Exists(dataSource)) {
+                    dataSource = Path.Combine(sourceRoot, DataAltSourcePath);
+                    if (!Directory.Exists(dataSource)) {
+                        Debug.Fail("Could not find location of test data.");
+                    }
+                }
+
+                CopyFiles(dataSource, Path.Combine(deployRoot, DataOutPath));
+            }
         }
 
         /// <summary>

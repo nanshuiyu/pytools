@@ -165,6 +165,9 @@
   <data name="SelectFolderForSearchPath" xml:space="preserve">
     <value>Select a folder to add to the Search Path</value>
   </data>
+  <data name="SelectZipFileForSearchPath" xml:space="preserve">
+    <value>Select a .zip file to add to the Search Path</value>
+  </data>
   <data name="SearchPathRemoveConfirmation" xml:space="preserve">
     <value>'{0}' will be removed from the project's search path.</value>
   </data>
@@ -183,7 +186,10 @@
   <data name="IsWindowsApplication" xml:space="preserve">
     <value>Is Windows Application</value>
   </data>
-  <data name="IsWindowsApplicationDescription" xml:space="preserve">
-    <value>True if the application should start w/o a console window</value>
+  <data name="VirtualEnvs" xml:space="preserve">
+    <value>Virtual Environments</value>
+  </data>
+  <data name="VirtualEnvRemoveConfirmation" xml:space="preserve">
+    <value>The virtual environment '{0}' will be removed from the project.</value>
   </data>
 </root>

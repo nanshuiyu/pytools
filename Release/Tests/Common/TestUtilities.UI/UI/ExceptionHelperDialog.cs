@@ -15,7 +15,7 @@
 using System.Windows.Automation;
 
 namespace TestUtilities.UI {
-    class ExceptionHelperDialog : AutomationWrapper {
+    public class ExceptionHelperDialog : AutomationWrapper {
         public ExceptionHelperDialog(AutomationElement element)
             : base(element) {
         }
@@ -43,12 +43,8 @@ namespace TestUtilities.UI {
             
         }
 
-        public void Ok() {
-            ClickButtonByName("OK");
-        }
-
-        public void Continue() {
-            ClickButtonByName("&Continue");
+        public void Cancel() {
+            ClickButtonByName("Cancel Button");
         }
     }
 }

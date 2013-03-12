@@ -129,11 +129,7 @@ namespace Microsoft.PythonTools.Django.TemplateParsing {
         }
 
         public virtual IEnumerable<CompletionInfo> GetCompletions(IDjangoCompletionContext context, int position) {
-            var vars = context.Variables;
-            if (vars != null) {
-                return CompletionInfo.ToCompletionInfo(vars.Keys, StandardGlyphGroup.GlyphGroupField);
-            }
-            return new CompletionInfo[0];
+            return CompletionInfo.ToCompletionInfo(context.Variables, StandardGlyphGroup.GlyphGroupField);
         }
 
         public virtual IEnumerable<string> GetVariables() {
@@ -188,7 +184,7 @@ namespace Microsoft.PythonTools.Django.TemplateParsing {
                         break;
                     }
                     argStart = parseInfo.Start + parseInfo.Command.Length + i;
-                    argLength = args[0].Length;
+                    argLength = args[i].Length;
                     break;
                 }
             }
@@ -362,7 +358,7 @@ namespace Microsoft.PythonTools.Django.TemplateParsing {
                         trimmed = words[i].Substring(0, nlStart);
                     }
                     
-                    if (i != inIndex + 1) {
+                    if (i != inIndex + 1 && trimmed == words[i]) { // if we trimmed we don't have an extra space
                         filterText += " ";
                         argsEnd += 1;
                     }
@@ -418,7 +414,9 @@ namespace Microsoft.PythonTools.Django.TemplateParsing {
                 return new CompletionInfo[0];
             } else if (Variable != null && position > InStart) {
                 var res = Variable.GetCompletions(context, position);
-                if (position >= ArgsEnd && ReversedStart == -1) {
+                if (position > ArgsEnd && 
+                    ReversedStart == -1 && 
+                    Variable.Expression != null) {
                     return System.Linq.Enumerable.Concat(
                         res,
                         new[] { new CompletionInfo("reversed", StandardGlyphGroup.GlyphKeyword) }
@@ -520,8 +518,7 @@ namespace Microsoft.PythonTools.Django.TemplateParsing {
 
         public override IEnumerable<CompletionInfo> GetCompletions(IDjangoCompletionContext context, int position) {
             // no argument yet, or the last argument was a keyword, then we are completing an identifier
-            if (Args.Length == 0 ||
-                (Args.Length > 0 && Args[Args.Length - 1].Classification == Classification.Keyword)) {
+            if (Args.Length == 0 || Args.Last().Classification == Classification.Keyword || position <= Args.Last().Span.End) {
                 // get the variables
                 return Enumerable.Concat(
                     base.GetCompletions(context, position),
