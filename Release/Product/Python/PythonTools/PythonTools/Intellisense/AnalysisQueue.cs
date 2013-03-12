@@ -31,7 +31,7 @@ namespace Microsoft.PythonTools.Intellisense {
         private readonly List<IAnalyzable>[] _queue;
         private readonly HashSet<IGroupableAnalysisProject> _enqueuedGroups = new HashSet<IGroupableAnalysisProject>();
         private TaskScheduler _scheduler;
-        internal bool _unload;
+        private CancellationTokenSource _cancel;
         private bool _isAnalyzing;
         private int _analysisPending;
 
@@ -39,6 +39,7 @@ namespace Microsoft.PythonTools.Intellisense {
 
         internal AnalysisQueue(VsProjectAnalyzer analyzer) {
             _workEvent = new AutoResetEvent(false);
+            _cancel = new CancellationTokenSource();
             _analyzer = analyzer;
 
             _queue = new List<IAnalyzable>[PriorityCount];
@@ -103,8 +104,8 @@ namespace Microsoft.PythonTools.Intellisense {
         }
 
         public void Stop() {
-            if (_workThread != null) {
-                _unload = true;
+            _cancel.Cancel();
+            if (_workThread.IsAlive) {
                 _workEvent.Set();
                 _workThread.Join();
             }
@@ -152,7 +153,7 @@ namespace Microsoft.PythonTools.Intellisense {
                 ((AutoResetEvent)threadStarted).Set();
             }
 
-            while (!_unload) {
+            while (!_cancel.IsCancellationRequested) {
                 IAnalyzable workItem;
 
                 AnalysisPriority pri;
@@ -168,9 +169,9 @@ namespace Microsoft.PythonTools.Intellisense {
                             Enqueue(new GroupAnalysis(groupable.AnalysisGroup, this), pri);
                         }
 
-                        groupable.Analyze(true);
+                        groupable.Analyze(_cancel.Token, true);
                     } else {
-                        workItem.Analyze();
+                        workItem.Analyze(_cancel.Token);
                     }
                     _isAnalyzing = false;
                 } else {
@@ -194,9 +195,9 @@ namespace Microsoft.PythonTools.Intellisense {
 
             #region IAnalyzable Members
 
-            public void Analyze() {
+            public void Analyze(CancellationToken cancel) {
                 _queue._enqueuedGroups.Remove(_project);
-                _project.AnalyzeQueuedEntries();
+                _project.AnalyzeQueuedEntries(cancel);
             }
 
             #endregion

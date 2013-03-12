@@ -27,11 +27,13 @@ using System.Windows.Forms;
 using System.Windows.Forms.Design;
 using Microsoft.PythonTools.Commands;
 using Microsoft.PythonTools.Debugger.DebugEngine;
+using Microsoft.PythonTools.Debugger.Remote;
 using Microsoft.PythonTools.Editor;
 using Microsoft.PythonTools.Intellisense;
 using Microsoft.PythonTools.Interpreter;
 using Microsoft.PythonTools.Navigation;
 using Microsoft.PythonTools.Options;
+using Microsoft.PythonTools.Parsing;
 using Microsoft.PythonTools.Project;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
@@ -68,17 +70,24 @@ namespace Microsoft.PythonTools {
     [ProvideAutoLoad(CommonConstants.UIContextSolutionExists)]
     [Description("Python Tools Package")]
     [ProvideAutomationObject("VsPython")]
-    [ProvideLanguageEditorOptionPage(typeof(PythonAdvancedEditorOptionsPage), PythonConstants.LanguageName, "", "Advanced", "114")]
+    [ProvideLanguageEditorOptionPage(typeof(PythonAdvancedEditorOptionsPage), PythonConstants.LanguageName, "", "Advanced", "113")]
+    [ProvideLanguageEditorOptionPage(typeof(PythonFormattingGeneralOptionsPage), PythonConstants.LanguageName, "Formatting", "General", "120")]
+    //[ProvideLanguageEditorOptionPage(typeof(PythonFormattingNewLinesOptionsPage), PythonConstants.LanguageName, "Formatting", "New Lines", "121")]
+    [ProvideLanguageEditorOptionPage(typeof(PythonFormattingSpacingOptionsPage), PythonConstants.LanguageName, "Formatting", "Spacing", "122")]
+    [ProvideLanguageEditorOptionPage(typeof(PythonFormattingStatementsOptionsPage), PythonConstants.LanguageName, "Formatting", "Statements", "123")]
+    [ProvideLanguageEditorOptionPage(typeof(PythonFormattingWrappingOptionsPage), PythonConstants.LanguageName, "Formatting", "Wrapping", "124")]
     [ProvideOptionPage(typeof(PythonInterpreterOptionsPage), "Python Tools", "Interpreters", 115, 116, true)]
     [ProvideOptionPage(typeof(PythonInteractiveOptionsPage), "Python Tools", "Interactive Windows", 115, 117, true)]
     [ProvideOptionPage(typeof(PythonDebugInteractiveOptionsPage), "Python Tools", "Debug Interactive Window", 115, 119, true)]
     [ProvideOptionPage(typeof(PythonAdvancedOptionsPage), "Python Tools", "Advanced", 115, 118, true)]
     [Guid(GuidList.guidPythonToolsPkgString)]              // our packages GUID        
-    [ProvideLanguageService(typeof(PythonLanguageInfo), PythonConstants.LanguageName, 106, RequestStockColors = true, ShowSmartIndent = true, ShowCompletion = true, DefaultToInsertSpaces = true, HideAdvancedMembersByDefault = false, EnableAdvancedMembersOption = true, ShowDropDownOptions = true)]
+    [ProvideLanguageService(typeof(PythonLanguageInfo), PythonConstants.LanguageName, 106, RequestStockColors = true, ShowSmartIndent = true, ShowCompletion = true, DefaultToInsertSpaces = true, HideAdvancedMembersByDefault = true, EnableAdvancedMembersOption = true, ShowDropDownOptions = true)]
     [ProvideLanguageExtension(typeof(PythonLanguageInfo), PythonConstants.FileExtension)]
     [ProvideLanguageExtension(typeof(PythonLanguageInfo), PythonConstants.WindowsFileExtension)]
-    [ProvideDebugEngine("Python Debugging", typeof(AD7ProgramProvider), typeof(AD7Engine), AD7Engine.DebugEngineId)]
+    [ProvideDebugEngine(AD7Engine.DebugEngineName, typeof(AD7ProgramProvider), typeof(AD7Engine), AD7Engine.DebugEngineId)]
     [ProvideDebugLanguage("Python", "{DA3C7D59-F9E4-4697-BEE7-3A0703AF6BFF}", PythonExpressionEvaluatorGuid, AD7Engine.DebugEngineId)]
+    [ProvideDebugPortSupplier("Python remote debugging (unsecured)", typeof(PythonRemoteDebugPortSupplierUnsecured), PythonRemoteDebugPortSupplierUnsecured.PortSupplierId)]
+    [ProvideDebugPortSupplier("Python remote debugging (SSL)", typeof(PythonRemoteDebugPortSupplierSsl), PythonRemoteDebugPortSupplierSsl.PortSupplierId)]
     [ProvidePythonExecutionModeAttribute(ExecutionMode.StandardModeId, "Standard", "Standard")]
     [ProvidePythonExecutionModeAttribute("{91BB0245-B2A9-47BF-8D76-DD428C6D8974}", "IPython", "visualstudio_ipython_repl.IPythonBackend", false)]
     [ProvidePythonExecutionModeAttribute("{3E390328-A806-4250-ACAD-97B5B37076E2}", "IPython w/o PyLab", "visualstudio_ipython_repl.IPythonBackendWithoutPyLab", false)]
@@ -349,6 +358,30 @@ You should uninstall IronPython 2.7 and re-install it with the ""Tools for Visua
             get {
                 return (PythonDebugInteractiveOptionsPage)GetDialogPage(typeof(PythonDebugInteractiveOptionsPage));
             }
+        }
+
+        /// <summary>
+        /// Gets a CodeFormattingOptions object configured to match the current settings.
+        /// </summary>
+        /// <returns></returns>
+        public CodeFormattingOptions GetCodeFormattingOptions() {
+            return ((PythonFormattingSpacingOptionsPage)GetDialogPage(typeof(PythonFormattingSpacingOptionsPage))).GetCodeFormattingOptions();
+        }
+
+        /// <summary>
+        /// Sets an individual code formatting option for the user's profile.
+        /// <param name="name">a name of one of the properties on the CodeFormattingOptions class.</param>
+        /// </summary>
+        public void SetFormattingOption(string name, object value) {
+            PythonFormattingOptionsPage.SetOption(name, value);
+        }
+
+        /// <summary>
+        /// Gets an individual code formatting option as configured by the user.
+        /// <param name="name">a name of one of the properties on the CodeFormattingOptions class.</param>
+        /// <returns></returns>
+        public object GetFormattingOption(string name) {
+            return PythonFormattingOptionsPage.GetOption(name);
         }
 
         /// <summary>
@@ -663,7 +696,7 @@ You should uninstall IronPython 2.7 and re-install it with the ""Tools for Visua
             using (var configKey = PythonToolsPackage.ApplicationRegistryRoot) {
                 var installDir = configKey.GetValue("InstallDir") as string;
                 if (installDir != null) {
-                    var toolsPath = Path.Combine(installDir, "Extensions\\Microsoft\\Python Tools for Visual Studio\\1.5");
+                    var toolsPath = Path.Combine(installDir, "Extensions\\Microsoft\\Python Tools for Visual Studio\\2.0");
                     if (File.Exists(Path.Combine(toolsPath, "PyDebugAttach.dll"))) {
                         return toolsPath;
                     }

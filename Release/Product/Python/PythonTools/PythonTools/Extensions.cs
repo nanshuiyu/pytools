@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -23,11 +24,13 @@ using Microsoft.PythonTools.Analysis;
 using Microsoft.PythonTools.Intellisense;
 using Microsoft.PythonTools.Interpreter;
 using Microsoft.PythonTools.Interpreter.Default;
+using Microsoft.PythonTools.Parsing.Ast;
 using Microsoft.PythonTools.Project;
 using Microsoft.PythonTools.Repl;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Repl;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
@@ -66,19 +69,98 @@ namespace Microsoft.PythonTools {
             return group;
         }
 
-        internal static ITrackingSpan CreateTrackingSpan(this IIntellisenseSession session, ITextBuffer buffer) {
+        internal static bool CanComplete(this ClassificationSpan token) {
+            return token.ClassificationType.IsOfType(PredefinedClassificationTypeNames.Keyword) |
+                token.ClassificationType.IsOfType(PredefinedClassificationTypeNames.Identifier);
+        }
+
+        /// <summary>
+        /// Returns the span to use for the provided intellisense session.
+        /// </summary>
+        /// <returns>A tracking span. The span may be of length zero if there
+        /// is no suitable token at the trigger point.</returns>
+        internal static ITrackingSpan GetApplicableSpan(this IIntellisenseSession session, ITextBuffer buffer) {
+            var snapshot = buffer.CurrentSnapshot;
             var triggerPoint = session.GetTriggerPoint(buffer);
 
-            var position = triggerPoint.GetPosition(buffer.CurrentSnapshot);
+            var span = snapshot.GetApplicableSpan(triggerPoint);
+            if (span != null) {
+                return span;
+            }
+            return snapshot.CreateTrackingSpan(triggerPoint.GetPosition(snapshot), 0, SpanTrackingMode.EdgeInclusive);
+        }
 
-            return buffer.CurrentSnapshot.CreateTrackingSpan(position, 0, SpanTrackingMode.EdgeInclusive);
+        /// <summary>
+        /// Returns the applicable span at the provided position.
+        /// </summary>
+        /// <returns>A tracking span, or null if there is no token at the
+        /// provided position.</returns>
+        internal static ITrackingSpan GetApplicableSpan(this ITextSnapshot snapshot, ITrackingPoint point) {
+            return snapshot.GetApplicableSpan(point.GetPosition(snapshot));
+        }
+
+        /// <summary>
+        /// Returns the applicable span at the provided position.
+        /// </summary>
+        /// <returns>A tracking span, or null if there is no token at the
+        /// provided position.</returns>
+        internal static ITrackingSpan GetApplicableSpan(this ITextSnapshot snapshot, int position) {
+            var classifier = snapshot.TextBuffer.GetPythonClassifier();
+            var line = snapshot.GetLineFromPosition(position);
+            if (classifier == null || line == null) {
+                return null;
+            }
+
+            var spanLength = position - line.Start.Position;
+            // Increase position by one to include 'foo' in: "abc.|foo"
+            if (spanLength < line.Length) {
+                spanLength += 1;
+            }
+            
+            var classifications = classifier.GetClassificationSpans(new SnapshotSpan(line.Start, spanLength));
+            // Handle "|"
+            if (classifications == null || classifications.Count == 0) {
+                return null;
+            }
+
+            var lastToken = classifications[classifications.Count - 1];
+            // Handle "foo |"
+            if (lastToken == null || position > lastToken.Span.End) {
+                return null;
+            }
+
+            if (position > lastToken.Span.Start) {
+                if (lastToken.CanComplete()) {
+                    // Handle "fo|o"
+                    return snapshot.CreateTrackingSpan(lastToken.Span, SpanTrackingMode.EdgeInclusive);
+                } else {
+                    // Handle "<|="
+                    return null;
+                }
+            }
+
+            var secondLastToken = classifications.Count >= 2 ? classifications[classifications.Count - 2] : null;
+            if (lastToken.Span.Start == position && lastToken.CanComplete() && 
+                (secondLastToken == null ||             // Handle "|foo"
+                 position > secondLastToken.Span.End || // Handle "if |foo"
+                 !secondLastToken.CanComplete())) {     // Handle "abc.|foo"
+                return snapshot.CreateTrackingSpan(lastToken.Span, SpanTrackingMode.EdgeInclusive);
+            }
+
+            // Handle "abc|."
+            // ("ab|c." would have been treated as "ab|c")
+            if (secondLastToken.Span.End == position && secondLastToken.CanComplete()) {
+                return snapshot.CreateTrackingSpan(secondLastToken.Span, SpanTrackingMode.EdgeInclusive);
+            }
+
+            return null;
         }
 
         internal static ITrackingSpan CreateTrackingSpan(this IQuickInfoSession session, ITextBuffer buffer) {
             var triggerPoint = session.GetTriggerPoint(buffer);
             var position = triggerPoint.GetPosition(buffer.CurrentSnapshot);
             if (position == buffer.CurrentSnapshot.Length) {
-                return ((IIntellisenseSession)session).CreateTrackingSpan(buffer);
+                return ((IIntellisenseSession)session).GetApplicableSpan(buffer);
             }
 
             return buffer.CurrentSnapshot.CreateTrackingSpan(position, 1, SpanTrackingMode.EdgeInclusive);
@@ -88,7 +170,7 @@ namespace Microsoft.PythonTools {
             var triggerPoint = session.GetTriggerPoint(buffer);
             var position = triggerPoint.GetPosition(buffer.CurrentSnapshot);
             if (position == buffer.CurrentSnapshot.Length) {
-                return ((IIntellisenseSession)session).CreateTrackingSpan(buffer);
+                return ((IIntellisenseSession)session).GetApplicableSpan(buffer);
             }
 
             var triggerChar = triggerPoint.GetCharacter(buffer.CurrentSnapshot);
@@ -127,11 +209,14 @@ namespace Microsoft.PythonTools {
         }
         
         internal static void GotoSource(this LocationInfo location) {
-            PythonToolsPackage.NavigateTo(
-                location.FilePath,
-                Guid.Empty,
-                location.Line - 1,
-                location.Column - 1);
+            string zipFileName = VsProjectAnalyzer.GetZipFileName(location.ProjectEntry);
+            if (zipFileName == null) {
+                PythonToolsPackage.NavigateTo(
+                    location.FilePath,
+                    Guid.Empty,
+                    location.Line - 1,
+                    location.Column - 1);
+            }
         }
 
         internal static bool TryGetAnalysis(this ITextBuffer buffer, out IProjectEntry analysis) {
@@ -425,5 +510,10 @@ namespace Microsoft.PythonTools {
         internal static Task StartNew(this TaskScheduler scheduler, Action func) {
             return Task.Factory.StartNew(func, default(CancellationToken), TaskCreationOptions.None, scheduler);
         }
+
+        internal static int GetStartIncludingWhiteSpace(this Node self, PythonAst ast) {
+            return self.StartIndex - (self.GetLeadingWhiteSpace(ast) ?? "").Length;
+        }
+
     }
 }

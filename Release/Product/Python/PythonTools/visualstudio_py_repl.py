@@ -17,6 +17,10 @@ try:
 except ImportError:
     # Renamed in Python3k
     import _thread as thread
+try:
+    from ssl import SSLError
+except:
+    SSLError = None
 
 import threading
 import sys
@@ -78,6 +82,44 @@ def _cmd(cmd_str):
         return bytes(cmd_str, 'ascii')
     return cmd_str
 
+def _command_line_to_args_list(cmdline):
+    """splits a string into a list using Windows command line syntax."""
+    args_list = []
+
+    if cmdline and cmdline.strip():
+        from ctypes import c_int, c_voidp, c_wchar_p
+        from ctypes import byref, POINTER, WinDLL
+
+        clta = WinDLL('shell32').CommandLineToArgvW
+        clta.argtypes = [c_wchar_p, POINTER(c_int)]
+        clta.restype = POINTER(c_wchar_p)
+
+        lf = WinDLL('kernel32').LocalFree
+        lf.argtypes = [c_voidp]
+
+        pNumArgs = c_int()
+        r = clta(cmdline, byref(pNumArgs))
+        if r:
+            for index in range(0, pNumArgs.value):
+                if sys.hexversion >= 0x030000F0:
+                    argval = r[index]
+                else:
+                    argval = r[index].encode('ascii', 'replace')
+                args_list.append(argval)
+            lf(r)
+        else:
+            sys.stderr.write('Error parsing script arguments:\n')
+            sys.stderr.write(cmdline + '\n')
+
+    return args_list
+
+
+def read_int(conn):
+    return struct.unpack('!q', conn.recv(8))[0]
+
+def write_int(conn, i):
+    conn.send(struct.pack('!q', i))
+
 
 class UnsupportedReplException(Exception):
     def __init__(self, reason):
@@ -118,6 +160,10 @@ actual inspection and introspection."""
         # start a new thread for communicating w/ the remote process
         start_new_thread(self._repl_loop, ())
 
+    def connect_using_socket(self, socket):
+        self.conn = socket
+        start_new_thread(self._repl_loop, ())
+
     def _repl_loop(self):
         """loop on created thread which processes communicates with the REPL window"""    
         try:
@@ -131,9 +177,14 @@ actual inspection and introspection."""
                 self.flush()                
                 self.conn.settimeout(10)
                 
+                # 2.x raises SSLError in case of timeout (http://bugs.python.org/issue10272)
+                if SSLError:
+                    timeout_exc_types = (socket.timeout, SSLError)
+                else:
+                    timeout_exc_types = socket.timeout
                 try:
                     inp = self.conn.recv(4)
-                except socket.timeout:
+                except timeout_exc_types: 
                     r, w, x = select.select([], [], [self.conn], 0)
                     if x:
                         # an exception event has occured on the socket...
@@ -179,7 +230,7 @@ actual inspection and introspection."""
 
     def _read_string(self):
         """ reads length of text to read, and then the text encoded in UTF-8, and returns the string"""
-        strlen, = struct.unpack('i', self.conn.recv(4))
+        strlen = read_int(self.conn)
         if not strlen:
             return ''
         res = _cmd('')
@@ -240,12 +291,12 @@ actual inspection and introspection."""
             self.send_lock.acquire()
             self.conn.send(ReplBackend._SRES)
             # single overload
-            self.conn.send(struct.pack('i', len(sigs)))
+            write_int(self.conn, len(sigs))
             for doc, args, vargs, varkw, defaults in sigs:
                 # write overload
                 self._write_string((doc or '')[:4096])
                 arg_count = len(args) + (vargs is not None) + (varkw is not None)
-                self.conn.send(struct.pack('i', arg_count))
+                write_int(self.conn, arg_count)
                 for arg in args:
                     if arg is None:
                         self._write_string('')
@@ -267,9 +318,9 @@ actual inspection and introspection."""
 
     def _cmd_sett(self):
         """sets the current thread and frame which code will execute against"""
-        thread_id = struct.unpack('i', self.conn.recv(4))[0]
-        frame_id = struct.unpack('i', self.conn.recv(4))[0]
-        frame_kind = struct.unpack('i', self.conn.recv(4))[0]
+        thread_id = read_int(self.conn)
+        frame_id = read_int(self.conn)
+        frame_kind = read_int(self.conn)
         self.set_current_thread_and_frame(thread_id, frame_id, frame_kind)
 
     def _cmd_mods(self):
@@ -282,7 +333,7 @@ actual inspection and introspection."""
         
         self.send_lock.acquire()
         self.conn.send(ReplBackend._MODS)
-        self.conn.send(struct.pack('i', len(res)))
+        write_int(self.conn, len(res))
         for name, filename in res:
             self._write_string(name)
             self._write_string(filename)
@@ -301,7 +352,7 @@ actual inspection and introspection."""
         self.execute_file(filename, args)
 
     def _cmd_debug_attach(self):
-        port, = struct.unpack('i', self.conn.recv(4))
+        port = read_int(self.conn)
         id = self._read_string()
         self.attach_process(port, id)
 
@@ -320,7 +371,7 @@ actual inspection and introspection."""
     }
 
     def _write_member_dict(self, mem_dict):
-        self.conn.send(struct.pack('i', len(mem_dict)))
+        write_int(self.conn, len(mem_dict))
         for name, type_name in mem_dict.items():
             self._write_string(name)
             self._write_string(type_name)
@@ -328,13 +379,17 @@ actual inspection and introspection."""
     def _write_string(self, string):
         if isinstance(string, unicode):
             bytes = string.encode('utf8')
+            bytes_len = len(bytes)
             self.conn.send(ReplBackend._UNICODE_PREFIX)
-            self.conn.send(struct.pack('i', len(bytes)))
-            self.conn.send(bytes)
+            write_int(self.conn, bytes_len)
+            if bytes_len > 0:
+                self.conn.send(bytes)
         else:
+            string_len = len(string)
             self.conn.send(ReplBackend._ASCII_PREFIX)
-            self.conn.send(struct.pack('i', len(string)))
-            self.conn.send(string)
+            write_int(self.conn, string_len)
+            if string_len > 0:
+                self.conn.send(string)
 
     def on_debugger_detach(self):
         self.send_lock.acquire()
@@ -359,7 +414,7 @@ actual inspection and introspection."""
     def write_png(self, image_bytes):
         self.send_lock.acquire()
         self.conn.send(ReplBackend._DPNG)
-        self.conn.send(struct.pack('i', len(image_bytes)))
+        write_int(self.conn, len(image_bytes))
         self.conn.send(image_bytes)
         self.send_lock.release()
 
@@ -369,7 +424,7 @@ actual inspection and introspection."""
         self.conn.send(ReplBackend._PRPC)
         self._write_string(ps1)
         self._write_string(ps2)
-        self.conn.send(struct.pack('i', update_all))
+        write_int(self.conn, update_all)
         self.send_lock.release()
     
     def send_error(self):
@@ -514,8 +569,7 @@ class BasicReplBackend(ReplBackend):
         self.execute_item_lock = threading.Lock()
         self.execute_item_lock.acquire()    # lock starts acquired (we use it like manual reset event)
 
-    def connect(self, port):
-        ReplBackend.connect(self, port)
+    def init_connection(self):
         sys.stdout = _ReplOutput(self, is_stdout = True)
         sys.stderr = _ReplOutput(self, is_stdout = False)
         sys.stdin = _ReplInput(self)
@@ -524,35 +578,14 @@ class BasicReplBackend(ReplBackend):
             System.Console.SetOut(DotNetOutput(self, True))
             System.Console.SetError(DotNetOutput(self, False))
 
-    def _command_line_to_args_list(self, cmdline):
-        args_list = []
+    def connect(self, port):
+        ReplBackend.connect(self, port)
+        self.init_connection()
 
-        if cmdline is not None and len(cmdline.strip()) > 0:
-            from ctypes import c_int, c_voidp, c_wchar_p
-            from ctypes import byref, POINTER, WinDLL
+    def connect_using_socket(self, socket):
+        ReplBackend.connect_using_socket(self, socket)
+        self.init_connection()
 
-            clta = WinDLL('shell32').CommandLineToArgvW
-            clta.argtypes = [c_wchar_p, POINTER(c_int)]
-            clta.restype = POINTER(c_wchar_p)
-
-            lf = WinDLL('kernel32').LocalFree
-            lf.argtypes = [c_voidp]
-
-            pNumArgs = c_int()
-            r = clta(cmdline, byref(pNumArgs))
-            if r:
-                for index in range(0, pNumArgs.value):
-                    if sys.hexversion >= 0x030000F0:
-                        argval = r[index]
-                    else:
-                        argval = r[index].encode('ascii', 'ignore')
-                    args_list.append(argval)
-                lf(r)
-            else:
-                sys.stderr.write('Error parsing script arguments:\n')
-                sys.stderr.write(cmdline + '\n')
-
-        return args_list
 
     def run_file_as_main(self, filename, args):
         f = open(filename, 'rb')
@@ -561,7 +594,7 @@ class BasicReplBackend(ReplBackend):
         finally:
             f.close()
         sys.argv = [filename]
-        sys.argv.extend(self._command_line_to_args_list(args))
+        sys.argv.extend(_command_line_to_args_list(args))
         self.exec_mod.__file__ = filename
         if sys.platform == 'cli':
             code = python_context.CreateSnippet(contents, None, SourceCodeKind.File)
@@ -992,14 +1025,21 @@ class DebugReplBackend(BasicReplBackend):
         self.frame_kind = None
         self.disconnect_requested = False
 
-    def connect_from_debugger(self, port):
-        ReplBackend.connect(self, port)
+    def init_connection(self):
         sys.stdout = _ReplOutput(self, is_stdout = True, old_out = sys.stdout)
         sys.stderr = _ReplOutput(self, is_stdout = False, old_out = sys.stderr)
         if sys.platform == 'cli':
             import System
             System.Console.SetOut(DotNetOutput(self, True, System.Console.Out))
             System.Console.SetError(DotNetOutput(self, False, System.Console.Error))
+
+    def connect_from_debugger(self, port):
+        ReplBackend.connect(self, port)
+        self.init_connection()
+
+    def connect_from_debugger_using_socket(self, socket):
+        ReplBackend.connect_using_socket(self, socket)
+        self.init_connection()
 
     def disconnect_from_debugger(self):
         sys.stdout = sys.stdout.old_out

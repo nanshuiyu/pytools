@@ -21,6 +21,7 @@ using System.Windows.Automation;
 using System.Windows.Input;
 using EnvDTE;
 using Microsoft.TC.TestHostAdapters;
+using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using TestUtilities;
@@ -29,7 +30,7 @@ namespace TestUtilities.UI {
     /// <summary>
     /// Provides wrappers for automating the VisualStudio UI.
     /// </summary>
-    class VisualStudioApp : AutomationWrapper {
+    public class VisualStudioApp : AutomationWrapper {
         private SolutionExplorerTree _solutionExplorerTreeView;
         private ObjectBrowser _objectBrowser;
         private readonly DTE _dte;
@@ -41,6 +42,12 @@ namespace TestUtilities.UI {
 
         private VisualStudioApp(IntPtr windowHandle)
             : base(AutomationElement.FromHandle(windowHandle)) {
+        }
+
+        public IComponentModel ComponentModel {
+            get {
+                return (IComponentModel)VsIdeTestHostContext.ServiceProvider.GetService(typeof(SComponentModel));
+            }
         }
 
         /// <summary>
@@ -177,6 +184,27 @@ namespace TestUtilities.UI {
             return WaitForDialogToReplace(Dte.MainWindow.HWnd);
         }
 
+        public ExceptionHelperDialog WaitForException() {
+            for (int i = 0; i < 100; i++) {
+                var window = FindByName("Exception Helper Indicator Window");
+                if (window != null) {
+                    var innerPane = window.FindFirst(TreeScope.Descendants,
+                        new PropertyCondition(
+                            AutomationElement.ControlTypeProperty,
+                            ControlType.Pane
+                        )
+                    );
+                    Assert.IsNotNull(innerPane);
+                    return new ExceptionHelperDialog(innerPane);
+                }
+                System.Threading.Thread.Sleep(100);
+            }
+
+            Assert.Fail("Failed to find exception helper window");
+            return null;
+        }
+
+
         /// <summary>
         /// Waits for a modal dialog to take over a given window and returns the HWND for the new dialog.
         /// </summary>
@@ -190,6 +218,8 @@ namespace TestUtilities.UI {
             for (int i = 0; i < 100 && hwnd.ToInt32() == originalHwndasInt; i++) {
                 System.Threading.Thread.Sleep(100);
                 uiShell.GetDialogOwnerHwnd(out hwnd);
+
+                DumpElement(AutomationElement.FromHandle(hwnd));
             }
 
             Assert.AreNotEqual(hwnd, IntPtr.Zero);

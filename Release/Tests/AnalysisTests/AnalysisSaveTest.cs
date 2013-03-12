@@ -16,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Microsoft.PythonTools.Analysis;
 using Microsoft.PythonTools.Interpreter;
 using Microsoft.PythonTools.Interpreter.Default;
@@ -89,6 +90,20 @@ def Overloaded():
 class WithInstanceMembers(object):
     def __init__(self):
         self.foo = 42
+
+class WithMemberFunctions(object):
+    def bar(self):
+        pass
+
+class SingleInheritance(WithMemberFunctions):
+    def baz(self):
+        pass
+
+class DoubleInheritance(SingleInheritance):
+    pass
+
+class MultipleInheritance(WithInstanceMembers, WithMemberFunctions):
+    pass
 ";
 
             using (var newPs = SaveLoad(new AnalysisModule("test", "test.py", code))) {
@@ -112,6 +127,10 @@ Aliased = test.Aliased
 FunctionNoRetType = test.FunctionNoRetType
 Overloaded = test.Overloaded
 WithInstanceMembers = test.WithInstanceMembers
+WithMemberFunctions = test.WithMemberFunctions
+SingleInheritance = test.SingleInheritance
+DoubleInheritance = test.DoubleInheritance
+MultipleInheritance = test.MultipleInheritance
 ";
                 var newMod = newPs.NewModule("baz", codeText);
                 int pos = codeText.LastIndexOf('\n');
@@ -129,12 +148,12 @@ WithInstanceMembers = test.WithInstanceMembers
                 Assert.AreEqual("type int", newMod.Analysis.GetValuesByIndex("foo", pos).First().ShortDescription);
 
                 var result = newMod.Analysis.GetSignaturesByIndex("f1", pos).ToArray();
-                Assert.AreEqual(result.Length, 1);
-                Assert.AreEqual(result[0].Parameters.Length, 1);
-                Assert.AreEqual(result[0].Parameters[0].Type, "int");
+                Assert.AreEqual(1, result.Length);
+                Assert.AreEqual(1, result[0].Parameters.Length);
+                Assert.AreEqual("int", result[0].Parameters[0].Type);
 
                 result = newMod.Analysis.GetSignaturesByIndex("m", pos).ToArray();
-                Assert.AreEqual(result.Length, 6);
+                Assert.AreEqual(6, result.Length);
                 
                 var members = newMod.Analysis.GetMembersByIndex("Aliased", pos, GetMemberOptions.None);
                 AssertUtil.Contains(members.Select(x => x.Name), "f");
@@ -151,6 +170,11 @@ WithInstanceMembers = test.WithInstanceMembers
                 var instMembers = newMod.Analysis.GetMembersByIndex("WithInstanceMembers", pos);
                 var fooMembers = instMembers.Where(x => x.Name == "foo");
                 Assert.AreNotEqual(null, fooMembers.FirstOrDefault().Name);
+
+                AssertUtil.ContainsAtLeast(newMod.Analysis.GetMemberNamesByIndex("WithMemberFunctions", pos), "bar");
+                AssertUtil.ContainsAtLeast(newMod.Analysis.GetMemberNamesByIndex("SingleInheritance", pos), "bar", "baz");
+                AssertUtil.ContainsAtLeast(newMod.Analysis.GetMemberNamesByIndex("DoubleInheritance", pos), "bar", "baz");
+                AssertUtil.ContainsAtLeast(newMod.Analysis.GetMemberNamesByIndex("MultipleInheritance", pos), "foo", "bar");
             }
         }
 
@@ -196,7 +220,7 @@ abc = foo.x
             }
 
             for (int i = 0; i < modules.Length; i++) {
-                entries[i].Analyze();
+                entries[i].Analyze(CancellationToken.None);
             }
 
             string tmpFolder = Path.Combine(Path.GetTempPath(), "6666d700-a6d8-4e11-8b73-3ba99a61e27b" /*Guid.NewGuid().ToString()*/);
@@ -236,7 +260,7 @@ abc = foo.x
             public IPythonProjectEntry NewModule(string name, string code) {
                 var entry = Analyzer.AddModule(name, name + ".py");
                 Prepare(entry, new StringReader(code), PythonLanguageVersion.V27);
-                entry.Analyze();
+                entry.Analyze(CancellationToken.None);
                 return entry;
             }
 

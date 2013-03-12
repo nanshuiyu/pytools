@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using Microsoft.PythonTools.Analysis.Interpreter;
 using Microsoft.PythonTools.Analysis.Values;
@@ -34,10 +35,9 @@ namespace Microsoft.PythonTools.Analysis {
         private readonly ModuleInfo _myScope;
         private IAnalysisCookie _cookie;
         private PythonAst _tree;
-        private Stack<InterpreterScope> _scopeTree;
         private ModuleAnalysis _currentAnalysis;
         private AnalysisUnit _unit;
-        private int _analysisVersion;        
+        private int _analysisVersion;
         private Dictionary<object, object> _properties = new Dictionary<object, object>();
         private ManualResetEventSlim _curWaiter;
         private int _updatesPending, _waiters;
@@ -51,13 +51,14 @@ namespace Microsoft.PythonTools.Analysis {
             _filePath = filePath;
             _cookie = cookie;
             _myScope = new ModuleInfo(_moduleName, this, state.Interpreter.CreateModuleContext());
-            _unit = new AnalysisUnit(_tree, new InterpreterScope[] { _myScope.Scope });
+            _unit = new AnalysisUnit(_tree, _myScope.Scope);
+            AnalysisLog.NewUnit(_unit);
         }
 
         public event EventHandler<EventArgs> OnNewParseTree;
         public event EventHandler<EventArgs> OnNewAnalysis;
 
-        public void UpdateTree(PythonAst newAst, IAnalysisCookie newCookie) {            
+        public void UpdateTree(PythonAst newAst, IAnalysisCookie newCookie) {
             lock (this) {
                 if (_updatesPending > 0) {
                     _updatesPending--;
@@ -73,7 +74,7 @@ namespace Microsoft.PythonTools.Analysis {
 
                 _tree = newAst;
                 _cookie = newCookie;
-                
+
                 if (_curWaiter != null) {
                     _curWaiter.Set();
                 }
@@ -119,7 +120,7 @@ namespace Microsoft.PythonTools.Analysis {
 
             lock (this) {
                 _waiters--;
-                if (_waiters == 0 && 
+                if (_waiters == 0 &&
                     Interlocked.CompareExchange(ref _sharedWaitEvent, _curWaiter, null) != null) {
                     _curWaiter.Dispose();
                 }
@@ -129,15 +130,18 @@ namespace Microsoft.PythonTools.Analysis {
             return gotNewTree ? _tree : null;
         }
 
-        public void Analyze() {
-            Analyze(false);
+        public void Analyze(CancellationToken cancel) {
+            Analyze(cancel, false);
         }
 
-        public void Analyze(bool enqueueOnly) {
+        public void Analyze(CancellationToken cancel, bool enqueueOnly) {
+            if (cancel.IsCancellationRequested) {
+                return;
+            }
             lock (this) {
                 _analysisVersion++;
 
-                Parse(enqueueOnly);
+                Parse(enqueueOnly, cancel);
             }
 
             var newAnalysis = OnNewAnalysis;
@@ -158,7 +162,7 @@ namespace Microsoft.PythonTools.Analysis {
             }
         }
 
-        private void Parse(bool enqueOnly) {
+        private void Parse(bool enqueOnly, CancellationToken cancel) {
             if (_tree == null) {
                 return;
             }
@@ -189,65 +193,57 @@ namespace Microsoft.PythonTools.Analysis {
                 }
             }
 
-            var unit = _unit = new AnalysisUnit(_tree, new InterpreterScope[] { _myScope.Scope });
+            _unit = new AnalysisUnit(_tree, _myScope.Scope);
+            AnalysisLog.NewUnit(_unit);
 
-            _scopeTree = new Stack<InterpreterScope>();
-            _scopeTree.Push(MyScope.Scope);
             MyScope.Scope.Children.Clear();
-            MyScope.NodeScopes.Clear();
-            MyScope.NodeVariables.Clear();
+            MyScope.Scope.ClearNodeScopes();
+            MyScope.Scope.ClearNodeValues();
 
             // create new analysis object and add to the queue to be analyzed
-            var newAnalysis = new ModuleAnalysis(_unit, _scopeTree);
-            
+            //var newAnalysis = new ModuleAnalysis(_unit);
+
             // collect top-level definitions first
-            var walker = new OverviewWalker(this, unit);
+            var walker = new OverviewWalker(this, _unit);
             _tree.Walk(walker);
             _myScope.Specialize();
 
-            PublishPackageChildrenInPackage();
+            // It may be that we have analyzed some child packages of this package already, but because it wasn't analyzed,
+            // the children were not registered. To handle this possibility, scan analyzed packages for children of this
+            // package (checked by module name first, then sanity-checked by path), and register any that match.
+            if (_filePath != null && _filePath.EndsWith("__init__.py")) {
+                string pathPrefix = Path.GetDirectoryName(_filePath) + "\\";
+                var children =
+                    from pair in _projectState.ModulesByFilename
+                    // Is the candidate child package in a subdirectory of our package?
+                    let fileName = pair.Key
+                    where fileName.StartsWith(pathPrefix) 
+                    let moduleName = pair.Value.Name
+                    // Is the full name of the candidate child package qualified with the name of our package?
+                    let lastDot = moduleName.LastIndexOf('.')
+                    where lastDot > 0
+                    let parentModuleName = moduleName.Substring(0, lastDot)
+                    where parentModuleName == _myScope.Name
+                    select pair.Value;
+                foreach (var child in children) {
+                    _myScope.AddChildPackage(child, _unit);
+                }
+            }
 
             _unit.Enqueue();
 
             if (!enqueOnly) {
-                ((IGroupableAnalysisProject)_projectState).AnalyzeQueuedEntries();
+                ((IGroupableAnalysisProject)_projectState).AnalyzeQueuedEntries(cancel);
             }
 
             // publish the analysis now that it's complete
-            _currentAnalysis = newAnalysis;
+            _currentAnalysis = new ModuleAnalysis(_unit, _unit.Scope);
         }
 
         public IGroupableAnalysisProject AnalysisGroup {
             get {
                 return _projectState;
             }
-        }
-
-        private void PublishPackageChildrenInPackage() {
-            if (_filePath != null && _filePath.EndsWith("__init__.py")) {
-                string dir = Path.GetDirectoryName(_filePath);
-                if (Directory.Exists(dir)) {
-                    foreach (var file in Directory.GetFiles(dir)) {
-                        if (file.EndsWith("__init__.py")) {
-                            continue;
-                        }
-
-                        ModuleInfo childModule;
-                        if (_projectState.ModulesByFilename.TryGetValue(file, out childModule)) {
-                            _myScope.AddChildPackage(childModule, _unit);
-                        }
-                    }
-
-                    foreach (var packageDir in Directory.GetDirectories(dir)) {
-                        string package = Path.Combine(packageDir, "__init__.py");
-                        ModuleInfo childPackage;
-                        if (File.Exists(package) && _projectState.ModulesByFilename.TryGetValue(package, out childPackage)) {
-                            _myScope.AddChildPackage(childPackage, _unit);
-                        }
-                    }
-                }
-            }
-
         }
 
         public string GetLine(int lineNo) {
@@ -311,9 +307,9 @@ namespace Microsoft.PythonTools.Analysis {
     /// Represents a unit of work which can be analyzed.
     /// </summary>
     public interface IAnalyzable {
-        void Analyze();
+        void Analyze(CancellationToken cancel);
     }
-    
+
     /// <summary>
     /// Represents a file which is capable of being analyzed.  Can be cast to other project entry types
     /// for more functionality.  See also IPythonProjectEntry and IXamlProjectEntry.
@@ -381,8 +377,8 @@ namespace Microsoft.PythonTools.Analysis {
     public interface IGroupableAnalysisProjectEntry {
         /// <summary>
         /// Analyzes this project entry optionally just adding it to the queue shared by the project.
-        /// </summary>        
-        void Analyze(bool enqueueOnly);
+        /// </summary>
+        void Analyze(CancellationToken cancel, bool enqueueOnly);
 
         IGroupableAnalysisProject AnalysisGroup {
             get;
@@ -394,7 +390,7 @@ namespace Microsoft.PythonTools.Analysis {
     /// analyzing them together.
     /// </summary>
     public interface IGroupableAnalysisProject {
-        void AnalyzeQueuedEntries();
+        void AnalyzeQueuedEntries(CancellationToken cancel);
     }
 
     public interface IPythonProjectEntry : IGroupableAnalysisProjectEntry, IProjectEntry {
@@ -405,6 +401,8 @@ namespace Microsoft.PythonTools.Analysis {
             get;
         }
 
+        string ModuleName { get; }
+
         ModuleAnalysis Analysis {
             get;
         }
@@ -413,7 +411,7 @@ namespace Microsoft.PythonTools.Analysis {
         event EventHandler<EventArgs> OnNewAnalysis;
 
         /// <summary>
-        /// Informs thhe project entry that a new tree will soon be available and will be provided by
+        /// Informs the project entry that a new tree will soon be available and will be provided by
         /// a call to UpdateTree.  Calling this method will cause WaitForCurrentTree to block until
         /// UpdateTree has been called.
         /// 

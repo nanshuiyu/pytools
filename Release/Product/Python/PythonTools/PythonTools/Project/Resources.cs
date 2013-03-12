@@ -48,6 +48,8 @@ namespace Microsoft.PythonTools.Project {
     }
 
     public class DynamicProjectSR {
+        public const string VirtualEnvs = "VirtualEnvs";
+        public const string VirtualEnvRemoveConfirmation = "VirtualEnvRemoveConfirmation";
         public const string SearchPaths = "SearchPaths";
         public const string SearchPathsDescription = "SearchPathsDescription";
         public const string InterpreterPath = "InterpreterPath";
@@ -65,6 +67,7 @@ namespace Microsoft.PythonTools.Project {
         public const string StartupFile = "StartupFile";
         public const string StartupFileDescription = "StartupFileDescription";
         public const string SelectFolderForSearchPath = "SelectFolderForSearchPath";
+        public const string SelectZipFileForSearchPath = "SelectZipFileForSearchPath";
         public const string SearchPathRemoveConfirmation = "SearchPathRemoveConfirmation";
         public const string WorkingDirectory = "WorkingDirectory";
         public const string WorkingDirectoryDescription = "WorkingDirectoryDescription";

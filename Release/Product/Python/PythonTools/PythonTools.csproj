@@ -18,7 +18,7 @@
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <SchemaVersion>2.0</SchemaVersion>
-    <ProjectTypeGuids>{82b43b9b-a64c-4715-b499-d71e9ca2bd60};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <ProjectTypeGuids>{82b43b9b-a64c-4715-b499-d71e9ca2bd60};{60DC8134-EBA5-43B8-BCC9-BB4BC16C2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Microsoft</RootNamespace>
@@ -34,6 +34,7 @@
     <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootSuffix Exp /Log</StartArguments>
     <DefineConstants>$(DefineConstants);$(SignedSym)</DefineConstants>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Platform)' == 'AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -92,6 +93,7 @@
   <ItemGroup Condition="'$(VSTarget)' == '10.0'">
     <Reference Include="Microsoft.Windows.Design.Host, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
+      <HintPath>C:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE\PrivateAssemblies\Microsoft.Windows.Design.Host.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup Condition="'$(VSTarget)' != '10.0'">
@@ -164,6 +166,8 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Design" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" Condition="'$(VSTarget)' != '10.0'" />
+    <Reference Include="System.IO.Compression.FileSystem" Condition="'$(VSTarget)' != '10.0'" />
     <Reference Include="System.Messaging" />
     <Reference Include="System.Net" />
     <Reference Include="System.Numerics" />
@@ -187,12 +191,34 @@
     </Reference>
     <Reference Include="WindowsBase" />
     <Reference Include="System.Xaml" />
+    <Reference Include="WindowsFormsIntegration" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ProvideComponentPickerPropertyPageAttribute.cs" />
     <Compile Include="ProvideEditorExtension2Attribute.cs" />
     <Compile Include="ProvideFileExtensionMapping.cs" />
     <Compile Include="ProvideFileFilterAttribute.cs" />
+    <Compile Include="PythonTools\Navigation\NavigateTo\PythonNavigateToItemDisplay.cs" />
+    <Compile Include="PythonTools\Navigation\NavigateTo\PythonNavigateToItemDisplayFactory.cs" />
+    <Compile Include="PythonTools\Navigation\NavigateTo\PythonNavigateToItemProviderFactory.cs" />
+    <Compile Include="PythonTools\Navigation\NavigateTo\PythonNavigateToItemProvider.cs" />
+    <Compile Include="PythonTools\Intellisense\CompletionComparer.cs" />
+    <Compile Include="PythonTools\Intellisense\FuzzyStringMatcher.cs" />
+    <Compile Include="PythonTools\Intellisense\FuzzyCompletionSet.cs" />
+    <Compile Include="PythonTools\Project\Automation\OAProjectConfigurationProperties.cs" />
+    <Compile Include="PythonTools\Project\CreateVirtualEnvironmentView.cs" />
+    <Compile Include="PythonTools\Project\InstallPythonPackage.xaml.cs">
+      <DependentUpon>InstallPythonPackage.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="PythonTools\Project\InstallPythonPackageView.cs" />
+    <Compile Include="PythonTools\Project\PythonInterpreterView.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvContainerNode.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvContainerNodeProperties.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvNode.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvNodeProperties.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvPackageNode.cs" />
+    <Compile Include="PythonTools\Project\VirtualEnvPackageNodeProperties.cs" />
+    <Compile Include="PythonTools\ProvideDebugPortSupplierAttribute.cs" />
     <Compile Include="PythonTools\DialogWindowVersioningWorkaround.cs" />
     <Compile Include="PythonTools\Commands\Command.cs" />
     <Compile Include="PythonTools\Commands\OpenDebugReplCommand.cs" />
@@ -221,6 +247,9 @@
     <Compile Include="PythonTools\Intellisense\CompletionControl.xaml.cs">
       <DependentUpon>CompletionControl.xaml</DependentUpon>
     </Compile>
+    <Compile Include="PythonTools\Project\CreateVirtualEnvironment.xaml.cs">
+      <DependentUpon>CreateVirtualEnvironment.xaml</DependentUpon>
+    </Compile>
     <Compile Include="PythonTools\Intellisense\CompletionOptions.cs" />
     <Compile Include="PythonTools\Intellisense\CompletionUIElementProvider.cs" />
     <Compile Include="PythonTools\Intellisense\ExceptionCompletionAnalysis.cs" />
@@ -236,6 +265,39 @@
     <Compile Include="PythonTools\Intellisense\SmartTagController.cs" />
     <Compile Include="PythonTools\Intellisense\SmartTagControllerProvider.cs" />
     <Compile Include="PythonTools\Navigation\TextViewFilter.cs" />
+    <Compile Include="PythonTools\Options\PythonFormattingWrappingOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\OptionCategory.cs" />
+    <Compile Include="PythonTools\Options\OptionInfo.cs" />
+    <Compile Include="PythonTools\Options\OptionsTreeView.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingGeneralOptionsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingGeneralOptionsControl.Designer.cs">
+      <DependentUpon>PythonFormattingGeneralOptionsControl.cs</DependentUpon>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingGeneralOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingOptionsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingOptionsControl.Designer.cs">
+      <DependentUpon>PythonFormattingOptionsControl.cs</DependentUpon>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingNewLinesOptionsPage.cs" />
+    <Compile Include="PythonTools\Options\PythonFormattingOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingSpacingOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="PythonTools\Options\PythonFormattingStatementsOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="PythonTools\Options\PythonInteractiveCommonOptions.cs" />
     <Compile Include="PythonTools\Options\PythonDebugInteractiveOptionsControl.cs">
       <SubType>UserControl</SubType>
@@ -286,9 +348,11 @@
     </Compile>
     <Compile Include="PythonTools\Project\WebPiReferenceNode.cs" />
     <Compile Include="PythonTools\ProvideX64DebuggerFixForIntegratedShellAttribute.cs" />
+    <Compile Include="PythonTools\Refactoring\CodeFormatter.cs" />
     <Compile Include="PythonTools\Refactoring\EnclosingNodeWalker.cs" />
     <Compile Include="PythonTools\Refactoring\ExtractMethodRequestView.cs" />
     <Compile Include="PythonTools\Refactoring\ImportRemover.cs" />
+    <Compile Include="PythonTools\Refactoring\LinePreservingCodeReplacer.cs" />
     <Compile Include="PythonTools\Refactoring\RenameVariableRequestView.cs" />
     <Compile Include="PythonTools\Repl\BasePythonReplEvaluator.cs" />
     <Compile Include="PythonTools\Repl\DebugReplFrameCommand.cs" />
@@ -528,7 +592,6 @@
     <Compile Include="PythonTools\Intellisense\ExpressionAnalysis.cs" />
     <Compile Include="PythonTools\Intellisense\FromImportCompletionAnalysis.cs" />
     <Compile Include="PythonTools\Intellisense\ImportCompletionAnalysis.cs" />
-    <Compile Include="PythonTools\Intellisense\LazyCompletion.cs" />
     <Compile Include="PythonTools\Intellisense\NormalCompletionAnalysis.cs" />
     <Compile Include="PythonTools\Intellisense\PythonAnalysisExtensions.cs" />
     <Compile Include="PythonTools\Intellisense\ProjectAnalyzer.cs" />
@@ -625,6 +688,9 @@
   </ItemGroup>
   <ItemGroup>
     <!-- VSIX -->
+    <Content Include="ptvsd\attach_server.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="BuiltinScraper.py">
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -636,7 +702,18 @@
       <SubType>Designer</SubType>
       <OutputSubPath>FromExistingCode</OutputSubPath>
     </None>
+    <Content Include="ptvsd\__init__.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Templates\Projects\FromExistingCode\FromExistingCode.zip">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="visualstudio_py_debugger.py">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="visualstudio_py_repl.py">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
@@ -719,6 +796,7 @@
     <Content Include="WebPiCmdLine\WebPICmdLine.exe.config">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>.</VSIXSubPath>
     </Content>
     <VSCTCompile Include="PythonTools.vsct">
       <ResourceName>1000</ResourceName>
@@ -926,10 +1004,6 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Templates -->
-    <Content Include="visualstudio_py_debugger.py">
-      <IncludeInVSIX>true</IncludeInVSIX>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <Content Include="visualstudio_py_launcher.py">
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -946,6 +1020,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="PythonTools\Options\PythonDebugInteractiveOptionsControl.resx">
       <DependentUpon>PythonDebugInteractiveOptionsControl.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="PythonTools\Options\PythonFormattingGeneralOptionsControl.resx">
+      <DependentUpon>PythonFormattingGeneralOptionsControl.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="PythonTools\Options\PythonFormattingOptionsControl.resx">
+      <DependentUpon>PythonFormattingOptionsControl.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="PythonTools\Options\PythonInteractiveOptionsControl.resx">
       <DependentUpon>PythonInteractiveOptionsControl.cs</DependentUpon>
@@ -967,10 +1047,6 @@
       <Link>PythonTools\Project\Resources\imagelis.bmp</Link>
     </EmbeddedResource>
     <Content Include="PythonScraper.py">
-      <IncludeInVSIX>true</IncludeInVSIX>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="visualstudio_py_repl.py">
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -1056,11 +1132,21 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="PythonTools\Project\CreateVirtualEnvironment.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="PythonTools\Navigation\WaitForCompleteAnalysisDialog.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
+    </Page>
+    <Page Include="PythonTools\Project\InstallPythonPackage.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="PythonTools\Project\TaskProgressBar.xaml">
       <Generator>MSBuild:Compile</Generator>
