@@ -1,0 +1,244 @@
+﻿<vstools:DialogWindowVersioningWorkaround
+    x:Class="Microsoft.PythonTools.Project.AddVirtualEnvironment"
+    x:ClassModifier="internal"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vstools="clr-namespace:Microsoft.VisualStudioTools"
+    xmlns:ptvs="clr-namespace:Microsoft.PythonTools"
+    xmlns:l="clr-namespace:Microsoft.PythonTools.Project"
+    xmlns:il="clr-namespace:Microsoft.PythonTools.InterpreterList"
+    xmlns:sys="clr-namespace:System;assembly=mscorlib"
+    xmlns:wpf="clr-namespace:Microsoft.PythonTools.Wpf"
+    Title="Add Virtual Environment"
+    SizeToContent="Height"
+    MinWidth="300" Width="500"
+    MinHeight="330"
+    ScrollViewer.VerticalScrollBarVisibility="Auto"
+    ResizeMode="CanResizeWithGrip"
+    TextOptions.TextFormattingMode="Display"
+    UseLayoutRounding="True"
+    WindowStartupLocation="CenterOwner"
+    Background="{DynamicResource {x:Static wpf:Controls.BackgroundKey}}"
+    TextElement.Foreground="{DynamicResource {x:Static wpf:Controls.ForegroundKey}}">
+    <vstools:DialogWindowVersioningWorkaround.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Save" CanExecute="Save_CanExecute" Executed="Save_Executed" />
+        <CommandBinding Command="ApplicationCommands.Close" CanExecute="Close_CanExecute" Executed="Close_Executed" />
+        <CommandBinding Command="{x:Static wpf:Commands.BrowseFolder}" CanExecute="Browse_CanExecute" Executed="Browse_Executed" />
+        <CommandBinding Command="{x:Static il:InterpreterList.WebChooseInterpreterCommand}" CanExecute="WebChooseInterpreter_CanExecute" Executed="WebChooseInterpreter_Executed" />
+    </vstools:DialogWindowVersioningWorkaround.CommandBindings>
+    <vstools:DialogWindowVersioningWorkaround.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Microsoft.PythonTools;component/Wpf/Controls.xaml" />
+
+                <ResourceDictionary>
+                    <wpf:IfElseConverter x:Key="BoolToVisible"
+                                         IfTrue="{x:Static Visibility.Visible}"
+                                         IfFalse="{x:Static Visibility.Hidden}" />
+                    <wpf:IfElseConverter x:Key="BoolToVisibleOrCollapsed"
+                                         IfTrue="{x:Static Visibility.Visible}"
+                                         IfFalse="{x:Static Visibility.Collapsed}" />
+                    <wpf:IfElseConverter x:Key="BoolNot">
+                        <wpf:IfElseConverter.IfTrue>
+                            <sys:Boolean>False</sys:Boolean>
+                        </wpf:IfElseConverter.IfTrue>
+                        <wpf:IfElseConverter.IfFalse>
+                            <sys:Boolean>True</sys:Boolean>
+                        </wpf:IfElseConverter.IfFalse>
+                    </wpf:IfElseConverter>
+                    
+                    <Style x:Key="MonoTextBox" TargetType="{x:Type TextBox}" BasedOn="{StaticResource {x:Type TextBox}}">
+                        <Setter Property="FontFamily" Value="Consolas" />
+                    </Style>
+                    
+                    <Style x:Key="WarningText" TargetType="{x:Type TextBlock}" BasedOn="{StaticResource {x:Type TextBlock}}">
+                        <Setter Property="FontWeight" Value="Bold" />
+                        <Setter Property="Padding" Value="0 0 0 5" />
+                    </Style>
+
+                    <DataTemplate x:Key="NameTemplate" DataType="{x:Type ptvs:InterpreterView}">
+                        <Label Name="InterpreterName" Content="{Binding Name}" />
+                    </DataTemplate>
+                </ResourceDictionary>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </vstools:DialogWindowVersioningWorkaround.Resources>
+    <Grid Margin="6">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="auto" />
+            <RowDefinition Height="auto" />
+            <RowDefinition Height="auto" />
+            <RowDefinition Height="auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="auto" />
+        </Grid.RowDefinitions>
+
+        <Label Grid.Row="0"
+               FontWeight="Bold"
+               FontSize="14"
+               Visibility="Collapsed"
+               Name="InvalidBrowsePathLabel">
+            The selected path did not contain a virtual environment.
+        </Label>
+
+        <wpf:LabelledControl Grid.Row="1"
+                             Title="Location of the virtual environment">
+            <wpf:LabelledControl.HelpText>
+                Specify the name or location of the virtual environment. If one
+                already exists, we will detect the base interpreter for you.
+            </wpf:LabelledControl.HelpText>
+            <Grid Margin="3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="auto" />
+                </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0"
+                             Name="VirtualEnvPathTextBox"
+                             AutomationProperties.AutomationId="VirtualEnvPath"
+                             Style="{StaticResource MonoTextBox}"
+                             Text="{Binding VirtualEnvName,UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Grid.Column="1"
+                            Style="{StaticResource BrowseFolderButton}"
+                            CommandParameter="{Binding VirtualEnvPath,Mode=OneWay}"
+                            CommandTarget="{Binding ElementName=VirtualEnvPathTextBox}" />
+            </Grid>
+        </wpf:LabelledControl>
+
+        <wpf:LabelledControl Grid.Row="2"
+                             Visibility="{Binding WillCreateVirtualEnv,Converter={StaticResource BoolToVisible}}"
+                             VerticalAlignment="Stretch"
+                             Title="Select an interpreter to create the virtual environment from.">
+            <wpf:LabelledControl.HelpText>
+                Packages in your base interpreter will not be available in the
+                virtual environment until you install them.
+            </wpf:LabelledControl.HelpText>
+            <ComboBox Grid.Row="3"
+                      Margin="3"
+                      AutomationProperties.AutomationId="BaseInterpreter"
+                      VerticalAlignment="Bottom"
+                      ItemsSource="{Binding Interpreters}"
+                      ItemTemplate="{StaticResource NameTemplate}"
+                      SelectedItem="{Binding BaseInterpreter}" />
+        </wpf:LabelledControl>
+
+        <wpf:LabelledControl Grid.Row="2"
+                             Visibility="{Binding WillAddVirtualEnv,Converter={StaticResource BoolToVisible}}"
+                             VerticalAlignment="Stretch"
+                             Title="The virtual environment is based on this interpreter.">
+            <wpf:LabelledControl.HelpText>
+                This cannot be changed. To use a different base interpreter, you
+                must create a new virtual environment.
+            </wpf:LabelledControl.HelpText>
+            <ComboBox Grid.Row="3"
+                      Margin="3"
+                      VerticalAlignment="Bottom"
+                      IsEnabled="False"
+                      ItemsSource="{Binding Interpreters}"
+                      ItemTemplate="{StaticResource NameTemplate}"
+                      SelectedItem="{Binding BaseInterpreter,Mode=OneWay}" />
+        </wpf:LabelledControl>
+
+        <wpf:LabelledControl Grid.Row="2"
+                             Visibility="{Binding CannotCreateVirtualEnv,Converter={StaticResource BoolToVisible}}"
+                             Title="We cannot create a virtual environment at the specified path.">
+            <wpf:LabelledControl.HelpText>
+                Choose a folder that does not exist, is empty, or contains an
+                existing virtual environment.
+            </wpf:LabelledControl.HelpText>
+        </wpf:LabelledControl>
+
+        <wpf:LabelledControl Grid.Row="2"
+                             Visibility="{Binding NoInterpretersInstalled,Converter={StaticResource BoolToVisible}}"
+                             Title="We cannot create a virtual environment.">
+            <wpf:LabelledControl.HelpText>
+                You will need to install a Python interpreter before creating a
+                virtual environment.
+            </wpf:LabelledControl.HelpText>
+            <Button Style="{StaticResource NavigationButton}"
+                    Margin="3"
+                    VerticalAlignment="Top"
+                    Command="{x:Static il:InterpreterList.WebChooseInterpreterCommand}">
+                Go online and help me find a Python interpreter
+            </Button>
+        </wpf:LabelledControl>
+
+        <Label Grid.Row="3">
+            Actions we will perform:
+        </Label>
+
+        <StackPanel Grid.Row="4" Margin="12 3" Orientation="Vertical">
+            <Label Visibility="{Binding WillInstallPipAndVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                   Style="{StaticResource BulletedLabel}">
+                Install pip and virtualenv packages
+            </Label>
+            <Label Visibility="{Binding WillInstallVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                   Style="{StaticResource BulletedLabel}">
+                Install the virtualenv package
+            </Label>
+            <Label Visibility="{Binding WillAddVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                   Style="{StaticResource BulletedLabel}">
+                Add the virtual environment
+            </Label>
+            <Label Style="{StaticResource BulletedLabel}">
+                <Label.Visibility>
+                    <MultiBinding Converter="{StaticResource BoolToVisibleOrCollapsed}">
+                        <Binding Path="WillCreateVirtualEnv" />
+                        <Binding Path="UseVEnv" Converter="{StaticResource BoolNot}" />
+                    </MultiBinding>
+                </Label.Visibility>
+                Create a virtual environment
+            </Label>
+            <Label Style="{StaticResource BulletedLabel}">
+                <Label.Visibility>
+                    <MultiBinding Converter="{StaticResource BoolToVisibleOrCollapsed}">
+                        <Binding Path="WillCreateVirtualEnv" />
+                        <Binding Path="UseVEnv" />
+                    </MultiBinding>
+                </Label.Visibility>
+                Create a virtual environment using venv
+            </Label>
+            <Label Visibility="{Binding CannotCreateVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                   Style="{StaticResource BulletedLabel}">
+                No action will be taken.
+            </Label>
+            <Label Visibility="{Binding MayNotSupportVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                   Style="{StaticResource BulletedLabel}">
+                WARNING - the selected interpreter may not support virtual
+                environments.
+            </Label>
+        </StackPanel>
+
+        <StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0 12 0 0">
+            <Button IsDefault="True"
+                    Visibility="{Binding WillAddVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                    Command="ApplicationCommands.Save"
+                    MinWidth="86" MinHeight="24" Margin="0 0 9 0"
+                    AutomationProperties.AutomationId="Add">
+                _Add
+            </Button>
+            <Button IsDefault="True"
+                    Visibility="{Binding WillCreateVirtualEnv,Converter={StaticResource BoolToVisibleOrCollapsed}}"
+                    Command="ApplicationCommands.Save"
+                    MinWidth="86" MinHeight="24" Margin="0 0 9 0"
+                    AutomationProperties.AutomationId="Create">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="{x:Static wpf:Controls.UacShield}"
+                               Width="16" Height="16"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding WillInstallElevated,Converter={StaticResource BoolToVisibleOrCollapsed}}"/>
+                        <AccessText Text="C_reate"
+                                    VerticalAlignment="Center" />
+                    </StackPanel>
+            </Button>
+            <Button IsCancel="True"
+                    Command="ApplicationCommands.Close"
+                    MinWidth="86" MinHeight="24" Margin="0 0 9 0"
+                    AutomationProperties.AutomationId="Cancel">
+                _Cancel
+            </Button>
+        </StackPanel>
+    </Grid>
+</vstools:DialogWindowVersioningWorkaround>
