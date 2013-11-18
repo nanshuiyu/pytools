@@ -1330,7 +1330,7 @@ namespace Microsoft.VisualStudioTools.Project {
             // Avoid adding files to the project multiple times.  Ultimately           
             // we should not use project items and instead should have virtual items.       
 
-            string path = CommonUtils.GetRelativeFilePath(ProjectHome, absFileName);            
+            string path = CommonUtils.GetRelativeFilePath(ProjectHome, absFileName);
             return CreateFileNode(new MsBuildProjectElement(this, path, GetItemType(path)));
         }
 
@@ -1343,7 +1343,7 @@ namespace Microsoft.VisualStudioTools.Project {
         }
 
         public ProjectElement MakeProjectElement(string type, string path) {
-            var item = BuildProject.AddItem(type, Microsoft.Build.Evaluation.ProjectCollection.Escape(path))[0];
+            var item = BuildProject.AddItem(type, MSBuild.ProjectCollection.Escape(path))[0];
             return new MsBuildProjectElement(this, item);
         }
 

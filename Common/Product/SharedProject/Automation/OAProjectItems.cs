@@ -189,9 +189,9 @@ namespace Microsoft.VisualStudioTools.Project.Automation {
 
                     string realPath = null;
                     if (op != VSADDITEMOPERATION.VSADDITEMOP_LINKTOFILE) {
-                        string fileName = System.IO.Path.GetFileName(path);
+                        string fileName = Path.GetFileName(path);
                         string fileDirectory = proj.GetBaseDirectoryForAddingFiles(this.NodeWithItems);
-                        realPath = System.IO.Path.Combine(fileDirectory, fileName);
+                        realPath = Path.Combine(fileDirectory, fileName);
                     }
                     else {
                         realPath = path;
