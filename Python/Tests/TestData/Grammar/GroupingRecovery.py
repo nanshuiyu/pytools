@@ -1,0 +1,3 @@
+﻿fob = (
+def f():
+    pass
